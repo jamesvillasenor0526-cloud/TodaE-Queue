@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "531938668869",
+    "project_id": "toda-equeue-app",
+    "storage_bucket": "toda-equeue-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:531938668869:android:719671c7a6bce9103dce2c",
+        "android_client_info": {
+          "package_name": "com.example.toda_equeue_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCOMRbkEaGvcYZPhkQNijQNjTCY4GEDUbA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:531938668869:android:f29ff288d713b8a53dce2c",
+        "android_client_info": {
+          "package_name": "com.example.toda_equeue_plus"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCOMRbkEaGvcYZPhkQNijQNjTCY4GEDUbA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

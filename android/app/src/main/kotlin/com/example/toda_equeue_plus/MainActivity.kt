@@ -1,0 +1,5 @@
+package com.example.toda_equeue_plus
+
+import io.flutter.embedding.android.FlutterActivity
+
+class MainActivity : FlutterActivity()

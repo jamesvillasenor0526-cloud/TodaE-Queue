@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_map/flutter_map.dart';
+import '../../../widgets/map_tiles.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../../config/theme.dart';
@@ -596,11 +597,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                         initialZoom: 16,
                       ),
                       children: [
-                        TileLayer(
-                          urlTemplate:
-                              'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                          userAgentPackageName: 'com.example.toda_equeue_plus',
-                        ),
+                        AppTileLayer(),
                         MarkerLayer(markers: markers),
                         // Traffic and incidents matter most while you are
                         // actually on the road, so the overlay follows the

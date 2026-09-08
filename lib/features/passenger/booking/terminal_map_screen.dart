@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_map/flutter_map.dart';
+import '../../../widgets/map_tiles.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../config/theme.dart';
 import '../../../config/routes.dart';
@@ -351,11 +352,7 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
                   initialZoom: 15,
                 ),
                 children: [
-                  TileLayer(
-                    urlTemplate:
-                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    userAgentPackageName: 'com.example.toda_equeue_plus',
-                  ),
+                  AppTileLayer(),
                   // Shaded beneath the terminal pins so the traffic colour
                   // never hides the thing the user came here to tap.
                   TrafficOverlay(
@@ -369,6 +366,7 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
                     },
                   ),
                   MarkerLayer(markers: markers),
+                  const AppMapAttribution(),
                 ],
               );
             },
@@ -555,7 +553,8 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
               ),
             ),
 
-          const Positioned(bottom: 16, left: 12, child: TrafficLegend()),
+          // Bottom-left is taken by the OpenStreetMap attribution.
+          const Positioned(bottom: 16, right: 12, child: TrafficLegend()),
 
           // Searched location indicator
           if (_searchedLocationName != null)

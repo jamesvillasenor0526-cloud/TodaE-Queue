@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_map/flutter_map.dart';
+import '../../../widgets/map_tiles.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../config/routes.dart';
 import '../../../config/theme.dart';
@@ -1661,11 +1662,7 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
                     initialZoom: widget.highlightDestination ? 14 : 15,
                   ),
                   children: [
-                    TileLayer(
-                      urlTemplate:
-                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.example.toda_equeue_plus',
-                    ),
+                    AppTileLayer(),
                     // Show route based on highlight mode
                     if (widget.highlightDestination &&
                         destinationPoint != null &&
@@ -2067,10 +2064,7 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                 },
               ),
               children: [
-                TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.example.toda_equeue_plus',
-                ),
+                AppTileLayer(),
                 CircleLayer(circles: circles),
                 // Drivers are the main source of these reports and the main
                 // audience for them. Shaded under the markers so terminals
@@ -2085,6 +2079,7 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                   },
                 ),
                 MarkerLayer(markers: markers),
+                const AppMapAttribution(),
               ],
             ),
             Positioned(
@@ -2118,7 +2113,8 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                 ),
               ),
             Positioned(
-              bottom: 16,
+              // Clear of the OpenStreetMap attribution in the corner.
+              bottom: 72,
               left: 16,
               child: FloatingActionButton.extended(
                 heroTag: 'driverReport',

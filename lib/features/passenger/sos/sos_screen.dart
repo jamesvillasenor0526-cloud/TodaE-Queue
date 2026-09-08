@@ -52,7 +52,7 @@ class _SosScreenState extends State<SosScreen>
       builder: (ctx) => AlertDialog(
         title: const Row(
           children: [
-            Icon(Icons.warning, color: Colors.red),
+            Icon(Icons.warning, color: AppTheme.errorRed),
             SizedBox(width: 8),
             Text('Trigger SOS?'),
           ],
@@ -209,13 +209,13 @@ class _SosScreenState extends State<SosScreen>
               const SizedBox(height: 32),
               const Text(
                 'Press the button in an emergency',
-                style: TextStyle(fontSize: 16, color: Colors.grey),
+                style: TextStyle(fontSize: 16, color: AppTheme.textMuted),
               ),
               const SizedBox(height: 8),
               const Text(
                 'Your location will be sent to\nTODA officers immediately',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey),
+                style: TextStyle(color: AppTheme.textMuted),
               ),
             ],
           ],

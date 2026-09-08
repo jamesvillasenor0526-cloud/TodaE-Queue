@@ -4,7 +4,7 @@ import '../../config/theme.dart';
 
 class UserProfileScreen extends StatelessWidget {
   final String uid;
-  final String viewerRole; // role of the person VIEWING
+  final String viewerRole;
 
   const UserProfileScreen({
     super.key,
@@ -12,12 +12,138 @@ class UserProfileScreen extends StatelessWidget {
     required this.viewerRole,
   });
 
+  void _showRatingDetails(BuildContext context, Map<String, dynamic> data) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('ratings')
+            .where('driverId', isEqualTo: uid)
+            .orderBy('createdAt', descending: true)
+            .snapshots(),
+        builder: (context, snapshot) {
+          final ratings = snapshot.data?.docs ?? [];
+          return Container(
+            padding: const EdgeInsets.all(24),
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.5,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Ratings for ${data['name'] ?? 'Driver'}',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (ratings.isEmpty)
+                  const Center(child: Text('No ratings yet.'))
+                else
+                  Expanded(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: ratings.length,
+                      itemBuilder: (context, index) {
+                        final r = ratings[index].data() as Map<String, dynamic>;
+                        final stars = r['rating'] ?? 0;
+                        final comment = r['comment'] ?? '';
+                        final date =
+                            (r['createdAt'] as Timestamp?)
+                                ?.toDate()
+                                .toString()
+                                .substring(0, 10) ??
+                            '';
+                        final passengerId = r['passengerId'] ?? '';
+
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    ...List.generate(
+                                      5,
+                                      (i) => Icon(
+                                        i < stars
+                                            ? Icons.star
+                                            : Icons.star_border,
+                                        color: Colors.amber,
+                                        size: 18,
+                                      ),
+                                    ),
+                                    const Spacer(),
+                                    Text(
+                                      date,
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        color: AppTheme.textMuted,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                FutureBuilder<DocumentSnapshot>(
+                                  future: FirebaseFirestore.instance
+                                      .collection('users')
+                                      .doc(passengerId)
+                                      .get(),
+                                  builder: (context, userSnap) {
+                                    final passengerName =
+                                        userSnap.data?['name'] ?? 'Passenger';
+                                    return Text(
+                                      'by $passengerName',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: AppTheme.textMuted,
+                                        fontStyle: FontStyle.italic,
+                                      ),
+                                    );
+                                  },
+                                ),
+                                if (comment.isNotEmpty) ...[
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    comment,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      color: AppTheme.textMuted,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Profile')),
-      body: FutureBuilder<DocumentSnapshot>(
-        future: FirebaseFirestore.instance.collection('users').doc(uid).get(),
+      body: StreamBuilder<DocumentSnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .snapshots(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
@@ -25,18 +151,15 @@ class UserProfileScreen extends StatelessWidget {
           if (!snapshot.hasData || !snapshot.data!.exists) {
             return const Center(child: Text('User not found.'));
           }
-
           final data = snapshot.data!.data() as Map<String, dynamic>;
           final role = data['role'] ?? 'passenger';
           final isVerified = data['isVerified'] ?? false;
           final name = data['name'] ?? 'Unknown';
-
           return SingleChildScrollView(
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
                 const SizedBox(height: 24),
-                // Avatar
                 Center(
                   child: Stack(
                     children: [
@@ -45,14 +168,19 @@ class UserProfileScreen extends StatelessWidget {
                         backgroundColor: role == 'driver'
                             ? AppTheme.primaryBlue
                             : AppTheme.primaryGreen,
-                        child: Text(
-                          name.substring(0, 1).toUpperCase(),
-                          style: const TextStyle(
-                            fontSize: 40,
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                        backgroundImage: data['profilePhotoUrl'] != null
+                            ? NetworkImage(data['profilePhotoUrl'])
+                            : null,
+                        child: data['profilePhotoUrl'] == null
+                            ? Text(
+                                name.substring(0, 1).toUpperCase(),
+                                style: const TextStyle(
+                                  fontSize: 40,
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              )
+                            : null,
                       ),
                       if (isVerified)
                         Positioned(
@@ -61,7 +189,7 @@ class UserProfileScreen extends StatelessWidget {
                           child: Container(
                             padding: const EdgeInsets.all(4),
                             decoration: const BoxDecoration(
-                              color: Colors.green,
+                              color: AppTheme.success,
                               shape: BoxShape.circle,
                             ),
                             child: const Icon(
@@ -75,8 +203,6 @@ class UserProfileScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 16),
-
-                // Name
                 Text(
                   name,
                   style: const TextStyle(
@@ -85,8 +211,6 @@ class UserProfileScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 4),
-
-                // Role + verification badge
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 12,
@@ -108,35 +232,40 @@ class UserProfileScreen extends StatelessWidget {
                         : '👤 Passenger',
                     style: TextStyle(
                       color: role == 'driver'
-                          ? (isVerified ? Colors.green : Colors.orange)
+                          ? (isVerified ? AppTheme.success : AppTheme.warning)
                           : AppTheme.primaryGreen,
                       fontWeight: FontWeight.bold,
                       fontSize: 13,
                     ),
                   ),
                 ),
-
-                // Rating (drivers only)
                 if (role == 'driver' && (data['averageRating'] ?? 0) > 0) ...[
                   const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.star, color: Colors.amber, size: 20),
-                      const SizedBox(width: 4),
-                      Text(
-                        '${data['averageRating']} (${data['totalRatings']} ratings)',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
+                  GestureDetector(
+                    onTap: () => _showRatingDetails(context, data),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.star, color: Colors.amber, size: 20),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${data['averageRating']} (${data['totalRatings']} ratings)',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                            decoration: TextDecoration.underline,
+                          ),
                         ),
-                      ),
-                    ],
+                        const Icon(
+                          Icons.chevron_right,
+                          size: 16,
+                          color: AppTheme.textMuted,
+                        ),
+                      ],
+                    ),
                   ),
                 ],
                 const SizedBox(height: 32),
-
-                // Info card
                 Card(
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
@@ -199,20 +328,18 @@ class _ProfileTile extends StatelessWidget {
   final IconData icon;
   final String title;
   final String value;
-
   const _ProfileTile({
     required this.icon,
     required this.title,
     required this.value,
   });
-
   @override
   Widget build(BuildContext context) {
     return ListTile(
       leading: Icon(icon, color: AppTheme.primaryGreen),
       title: Text(
         title,
-        style: const TextStyle(fontSize: 12, color: Colors.grey),
+        style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
       ),
       subtitle: Text(
         value,

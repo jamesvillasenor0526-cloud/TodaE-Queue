@@ -1,4 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../models/trip_state.dart';
+import 'fare_service.dart';
+import 'receipt_service.dart';
 
 /// Result of attempting to dispatch a driver to a passenger.
 class DispatchResult {
@@ -41,6 +44,12 @@ class DispatchService {
   Future<DispatchResult> dispatchNextDriver({
     required String terminalId,
     required String passengerId,
+    double? pickupLatitude,
+    double? pickupLongitude,
+    double? destinationLatitude,
+    double? destinationLongitude,
+    double? distance,
+    double? fare,
   }) async {
     const maxAttempts = 5;
 
@@ -50,6 +59,7 @@ class DispatchService {
           .where('terminalId', isEqualTo: terminalId)
           .where('status', isEqualTo: 'waiting')
           .orderBy('checkedInAt')
+          .orderBy('driverId')
           .limit(1)
           .get();
 
@@ -59,9 +69,21 @@ class DispatchService {
         );
       }
 
+      final passengerDoc = await _firestore
+          .collection('users')
+          .doc(passengerId)
+          .get();
+      final passengerName = passengerDoc.data()?['name'] ?? 'Passenger';
+
       final candidateDoc = candidateSnap.docs.first;
       final candidateRef = candidateDoc.reference;
       final bookingRef = _firestore.collection('bookings').doc();
+
+      final driverDoc = await _firestore
+          .collection('users')
+          .doc(candidateDoc.data()['driverId'])
+          .get();
+      final driverPhone = driverDoc.data()?['phone'] ?? '';
 
       try {
         final claimed = await _firestore.runTransaction<bool>((tx) async {
@@ -78,6 +100,8 @@ class DispatchService {
             'status': 'dispatched',
             'dispatchedAt': FieldValue.serverTimestamp(),
             'bookingId': bookingRef.id,
+            'passengerId': passengerId,
+            'passengerName': null,
           });
 
           tx.set(bookingRef, {
@@ -87,10 +111,28 @@ class DispatchService {
             'terminalId': terminalId,
             'terminalName': data['terminalName'],
             'queueEntryId': candidateRef.id,
-            'status': 'assigned',
+            // Authoritative state for both apps. The legacy `status` /
+            // `paymentStatus` fields below are mirrors kept for the admin
+            // dashboard, which still compares the old vocabulary.
+            'tripStatus': TripStatus.requested.wire,
+            'paymentState': PaymentState.unpaid.wire,
+            'status': TripStatus.requested.legacyStatus,
             'createdAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
             'driverLatitude': null,
             'driverLongitude': null,
+            'pickupLatitude': pickupLatitude,
+            'pickupLongitude': pickupLongitude,
+            'dispatchTime': FieldValue.serverTimestamp(),
+            'passengerName': passengerName,
+            'destinationLatitude': destinationLatitude,
+            'destinationLongitude': destinationLongitude,
+            'distance': distance,
+            'fare': fare,
+            'pickupFee': FareService.pickupFee,
+            'paymentMethod': null,
+            'paymentStatus': PaymentState.unpaid.legacyPaymentStatus,
+            'driverPhone': driverPhone,
           });
 
           return true;
@@ -116,7 +158,8 @@ class DispatchService {
   }
 
   /// Marks a dispatched queue entry (and its linked booking, if any) as
-  /// completed, freeing the driver up to check in elsewhere.
+  /// completed. Payment is handled separately, after the trip ends — see
+  /// [confirmPayment].
   Future<void> completeTrip({
     required String queueEntryId,
     String? bookingId,
@@ -138,5 +181,49 @@ class DispatchService {
     }
 
     await batch.commit();
+  }
+
+  /// Records that [bookingId] was paid via [paymentMethod] ('cash' or
+  /// 'gcash') and generates its receipt. Called once payment is settled —
+  /// by the passenger for GCash, or by the driver confirming cash received
+  /// in person — which happens after the trip is marked completed.
+  Future<void> confirmPayment({
+    required String bookingId,
+    required String paymentMethod,
+  }) async {
+    final bookingRef = _firestore.collection('bookings').doc(bookingId);
+    final bookingSnap = await bookingRef.get();
+    final bookingData = bookingSnap.data() ?? {};
+
+    await bookingRef.update({
+      'paymentMethod': paymentMethod,
+      'paymentStatus': 'paid',
+      'paidAt': FieldValue.serverTimestamp(),
+      if (paymentMethod == 'cash') 'driverConfirmedPayment': true,
+      if (paymentMethod == 'cash') 'driverConfirmedAt': FieldValue.serverTimestamp(),
+    });
+
+    final receiptNumber = await ReceiptService.instance.generateReceipt(
+      bookingId: bookingId,
+      passengerId: bookingData['passengerId'] ?? '',
+      passengerName: bookingData['passengerName'] ?? 'Passenger',
+      driverId: bookingData['driverId'] ?? '',
+      driverName: bookingData['driverName'] ?? 'Driver',
+      terminalName: bookingData['terminalName'] ?? 'Terminal',
+      pickupLat: (bookingData['pickupLatitude'] ?? 0).toDouble(),
+      pickupLng: (bookingData['pickupLongitude'] ?? 0).toDouble(),
+      destinationLat: (bookingData['destinationLatitude'] ?? 0).toDouble(),
+      destinationLng: (bookingData['destinationLongitude'] ?? 0).toDouble(),
+      distance: (bookingData['distance'] ?? 0).toDouble(),
+      fare: (bookingData['fare'] ?? 0).toDouble(),
+      paymentMethod: paymentMethod,
+      pickupFee: (bookingData['pickupFee'] ?? FareService.pickupFee).toDouble(),
+      baseFare: FareService.minimumFare,
+    );
+
+    await ReceiptService.instance.updateBookingWithReceipt(
+      bookingId: bookingId,
+      receiptNumber: receiptNumber,
+    );
   }
 }

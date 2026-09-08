@@ -10,6 +10,11 @@ import '../features/passenger/trip_tracking/trip_tracking_screen.dart';
 import '../features/driver/queue/driver_home_screen.dart';
 import '../features/shared/trip_detail_screen.dart';
 import '../features/shared/user_profile_screen.dart';
+import '../features/shared/receipt_screen.dart';
+import '../features/auth/screens/forgot_password_screen.dart';
+import '../features/auth/screens/verify_email_screen.dart';
+import '../features/passenger/booking/fare_matrix_screen.dart';
+import '../features/shared/send_ticket_screen.dart';
 
 class AppRoutes {
   static const String userProfile = '/user-profile';
@@ -24,6 +29,11 @@ class AppRoutes {
   static const String tripTracking = '/passenger/tracking';
   static const String sos = '/sos';
   static const String profile = '/profile';
+  static const String receipt = '/receipt';
+  static const String forgotPassword = '/forgot-password';
+  static const String verifyEmail = '/verify-email';
+  static const String fareMatrix = '/fare-matrix';
+  static const String sendTicket = '/send-ticket';
 
   static Route<dynamic> generateRoute(RouteSettings settings) {
     switch (settings.name) {
@@ -43,6 +53,14 @@ class AppRoutes {
         return MaterialPageRoute(builder: (_) => const TerminalMapScreen());
       case sos:
         return MaterialPageRoute(builder: (_) => const SosScreen());
+      case forgotPassword:
+        return MaterialPageRoute(builder: (_) => const ForgotPasswordScreen());
+      case verifyEmail:
+        return MaterialPageRoute(builder: (_) => const VerifyEmailScreen());
+      case fareMatrix:
+        return MaterialPageRoute(builder: (_) => const FareMatrixScreen());
+      case sendTicket:
+        return MaterialPageRoute(builder: (_) => const SendTicketScreen());
       case userProfile:
         final args = settings.arguments as Map<String, dynamic>?;
         return MaterialPageRoute(
@@ -67,6 +85,11 @@ class AppRoutes {
             driverName: args?['driverName']?.toString() ?? 'Driver',
             terminalName: args?['terminalName']?.toString() ?? 'Terminal',
           ),
+        );
+      case receipt:
+        return MaterialPageRoute(
+          builder: (_) =>
+              ReceiptScreen(bookingId: settings.arguments as String),
         );
       default:
         return MaterialPageRoute(

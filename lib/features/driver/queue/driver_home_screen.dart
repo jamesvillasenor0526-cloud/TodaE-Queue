@@ -10,6 +10,19 @@ import '../../../config/theme.dart';
 import '../../../core/services/geofence_service.dart';
 import '../../../core/services/dispatch_service.dart';
 import '../../../core/services/notification_service.dart';
+import '../../../core/services/routing_service.dart';
+import '../../../core/utils/date_formatter.dart';
+import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import 'dart:io';
+import '../../../core/services/cloudinary_service.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../../../config/theme_controller.dart';
+import '../../../widgets/shimmer_loading.dart';
+import '../../../widgets/state_views.dart';
+import 'widgets/trip_action_panel.dart';
+import '../../../core/models/trip_state.dart';
+import '../../../core/services/trip_service.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   const DriverHomeScreen({super.key});
@@ -24,6 +37,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   int _currentIndex = 0;
 
   StreamSubscription<Position>? _positionSub;
+  StreamSubscription<QuerySnapshot>? _activeBookingSub;
   bool _isCheckingLocation = false;
   bool _locationPermissionDenied = false;
   String? _lastPromptedTerminalId;
@@ -34,16 +48,36 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   void initState() {
     super.initState();
     _startLocationWatch();
+    _watchActiveBooking();
   }
 
   @override
   void dispose() {
-    // Only cancel this screen's own listener — the shared GPS stream
-    // itself is stopped centrally here too, since this is the screen that
-    // started it and nothing else should need it once the driver leaves.
+    _activeBookingSub?.cancel();
     _positionSub?.cancel();
     _geofence.stopTracking();
     super.dispose();
+  }
+
+  void _watchActiveBooking() {
+    _activeBookingSub = FirebaseFirestore.instance
+        .collection('queueEntries')
+        .where('driverId', isEqualTo: uid)
+        .where('status', whereIn: ['dispatched', 'accepted']) // ← ADD accepted
+        .snapshots()
+        .listen((snapshot) {
+          if (snapshot.docs.isNotEmpty) {
+            final data = snapshot.docs.first.data();
+            final bookingId = data['bookingId'] as String?;
+            if (bookingId != null && bookingId != _activeBookingId) {
+              debugPrint('🎯 Direct listener: _activeBookingId = $bookingId');
+              setState(() {
+                _activeBookingId = bookingId;
+                _hasActiveEntry = true;
+              });
+            }
+          }
+        });
   }
 
   Future<void> _startLocationWatch() async {
@@ -56,27 +90,31 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Future<void> _onPositionUpdate(Position position) async {
-    // Update driver location in active booking if dispatched
-    // Always update driver's live location in users collection
-await FirebaseFirestore.instance
-    .collection('users')
-    .doc(uid)
-    .update({
+    debugPrint('📍 GPS STREAM: ${position.latitude}, ${position.longitude}');
+    debugPrint(
+      '📍 _hasActiveEntry=$_hasActiveEntry, _activeBookingId=$_activeBookingId',
+    );
+
+    // Update driver's live location in users collection
+    await FirebaseFirestore.instance.collection('users').doc(uid).update({
       'lastLatitude': position.latitude,
       'lastLongitude': position.longitude,
       'lastLocationAt': FieldValue.serverTimestamp(),
       'isOnline': true,
     });
 
-// Update driver location in active booking if dispatched
+    // Update driver location in active booking if dispatched
     if (_activeBookingId != null) {
+      debugPrint('✅ Updating booking $_activeBookingId with driver location');
       await FirebaseFirestore.instance
           .collection('bookings')
           .doc(_activeBookingId)
-          .update({
+          .set({
             'driverLatitude': position.latitude,
             'driverLongitude': position.longitude,
-          });
+          }, SetOptions(merge: true)); // ← Use set with merge
+    } else {
+      debugPrint('⚠️ No active booking ID — location NOT sent to bookings');
     }
 
     if (_hasActiveEntry || _isCheckingLocation || !mounted) return;
@@ -124,9 +162,31 @@ await FirebaseFirestore.instance
 
   void _showArrivalPrompt(
     QueryDocumentSnapshot<Map<String, dynamic>> terminalDoc,
-  ) {
+  ) async {
     final data = terminalDoc.data();
     final name = data['name'] ?? 'this terminal';
+
+    // Check if driver is verified before showing prompt
+    final userDoc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .get();
+    final userData = userDoc.data();
+    final isVerified = userData?['isVerified'] ?? false;
+
+    if (!isVerified) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('You need to be verified before joining the queue.'),
+            backgroundColor: AppTheme.warning,
+          ),
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
 
     showModalBottomSheet(
       context: context,
@@ -159,7 +219,7 @@ await FirebaseFirestore.instance
             const SizedBox(height: 8),
             const Text(
               'Would you like to check in to the queue here?',
-              style: TextStyle(color: Colors.grey),
+              style: TextStyle(color: AppTheme.textMuted),
             ),
             const SizedBox(height: 20),
             Row(
@@ -168,7 +228,6 @@ await FirebaseFirestore.instance
                   child: OutlinedButton(
                     onPressed: () {
                       Navigator.pop(context);
-                      // Reset so prompt can show again if driver re-enters
                       setState(() => _lastPromptedTerminalId = null);
                     },
                     child: const Text('Not now'),
@@ -198,18 +257,95 @@ await FirebaseFirestore.instance
           .collection('users')
           .doc(uid)
           .get();
-      final driverName = (userDoc.data()?['name'] ?? 'Driver').toString();
-      final assignedTerminalId = userDoc.data()?['assignedTerminalId'];
+
+      final data = userDoc.data();
+      final driverName = (data?['name'] ?? 'Driver').toString();
+      final assignedTerminalId = data?['assignedTerminalId'];
+      final isVerified = data?['isVerified'] ?? false;
+      final verificationStatus = data?['verificationStatus'] ?? 'pending';
+
+      // Block unverified drivers
+      if (!isVerified) {
+        String message;
+        switch (verificationStatus) {
+          case 'pending':
+            message =
+                'Your account is pending verification. Please wait for admin approval.';
+            break;
+          case 'rejected':
+            message =
+                'Your account was rejected. Please contact your TODA admin.';
+            break;
+          default:
+            message =
+                'Your account is not verified. Please contact your TODA admin.';
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(message),
+              backgroundColor: AppTheme.warning,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
+        return;
+      }
+
+      // Check cooldown
+      final cooldownUntil = data?['queueCooldownUntil'] as Timestamp?;
+      if (cooldownUntil != null) {
+        final cooldownEnd = cooldownUntil.toDate().add(
+          const Duration(minutes: 20),
+        );
+        final now = DateTime.now();
+        if (now.isBefore(cooldownEnd)) {
+          final remaining = cooldownEnd.difference(now);
+          final minutesLeft = remaining.inMinutes + 1;
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Cooldown active. You can re-join in $minutesLeft minute(s).',
+                ),
+                backgroundColor: AppTheme.warning,
+                duration: const Duration(seconds: 4),
+              ),
+            );
+          }
+          return;
+        }
+      }
+
+      // Block check-in if driver has active booking
+      final activeBookingSnap = await FirebaseFirestore.instance
+          .collection('queueEntries')
+          .where('driverId', isEqualTo: uid)
+          .where('status', whereIn: ['dispatched', 'accepted'])
+          .limit(1)
+          .get();
+
+      if (activeBookingSnap.docs.isNotEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('You have an active booking. Complete it first.'),
+              backgroundColor: AppTheme.warning,
+            ),
+          );
+        }
+        return;
+      }
 
       // Block check-in at wrong terminal
       if (assignedTerminalId != null && assignedTerminalId != terminalId) {
         final assignedTerminalName =
-            userDoc.data()?['assignedTerminalName'] ?? 'your assigned terminal';
+            data?['assignedTerminalName'] ?? 'your assigned terminal';
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('You can only check in at $assignedTerminalName.'),
-              backgroundColor: Colors.red,
+              backgroundColor: AppTheme.errorRed,
             ),
           );
         }
@@ -223,6 +359,11 @@ await FirebaseFirestore.instance
         'terminalName': terminalName,
         'status': 'waiting',
         'checkedInAt': FieldValue.serverTimestamp(),
+      });
+
+      // Clear cooldown on successful check-in
+      await FirebaseFirestore.instance.collection('users').doc(uid).update({
+        'queueCooldownUntil': FieldValue.delete(),
       });
 
       if (mounted) {
@@ -246,8 +387,25 @@ await FirebaseFirestore.instance
         .update({
           'status': 'cancelled',
           'cancelledAt': FieldValue.serverTimestamp(),
+          'cancelledReason': 'Driver left the queue',
+          'completedAt': FieldValue.serverTimestamp(),
         });
+
+    // Save cooldown timestamp to the USER document
+    await FirebaseFirestore.instance.collection('users').doc(uid).update({
+      'queueCooldownUntil': FieldValue.serverTimestamp(),
+    });
+
     _lastPromptedTerminalId = null;
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You left the queue. 20-minute cooldown applied.'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   Future<void> _completeTrip(String entryId, String? bookingId) async {
@@ -255,14 +413,36 @@ await FirebaseFirestore.instance
       queueEntryId: entryId,
       bookingId: bookingId,
     );
-    setState(() => _activeBookingId = null);
-    _lastPromptedTerminalId = null;
+    setState(() {
+      _activeBookingId = null;
+      _hasActiveEntry = false;
+      _lastPromptedTerminalId = null;
+      _isCheckingLocation = false;
+    });
+
+    // Restart GPS stream for next check-in
+    await _startLocationWatch();
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Trip completed. You can check in again.'),
         ),
       );
+    }
+  }
+
+  void _callPassenger(String phoneNumber) async {
+    final url = Uri.parse('tel:$phoneNumber');
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url);
+    }
+  }
+
+  void _messagePassenger(String phoneNumber) async {
+    final url = Uri.parse('sms:$phoneNumber');
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url);
     }
   }
 
@@ -273,10 +453,32 @@ await FirebaseFirestore.instance
         title: const Text('TODA E-QUEUE+'),
         actions: [
           IconButton(
+            tooltip: 'Sign out',
             icon: const Icon(Icons.logout),
             onPressed: () async {
-              await FirebaseAuth.instance.signOut();
-              if (context.mounted) {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Sign Out'),
+                  content: const Text('Are you sure you want to sign out?'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text(
+                        'Sign Out',
+                        style: TextStyle(color: AppTheme.errorRed),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm == true && context.mounted) {
+                await FirebaseAuth.instance.signOut();
+                if (!context.mounted) return;
                 Navigator.pushReplacementNamed(context, AppRoutes.login);
               }
             },
@@ -302,6 +504,9 @@ await FirebaseFirestore.instance
             },
             onLeaveQueue: _leaveQueue,
             onCompleteTrip: _completeTrip,
+            onBookingAccepted: _startLocationWatch, // ADD THIS
+            onCallPassenger: _callPassenger, // ← ADD
+            onMessagePassenger: _messagePassenger, // ← ADD
           ),
           _DriverMapTab(isActive: _currentIndex == 1),
           _DriverHistoryTab(uid: uid),
@@ -336,7 +541,10 @@ await FirebaseFirestore.instance
       ),
       floatingActionButton: FloatingActionButton.extended(
         heroTag: 'sos',
-        onPressed: () => Navigator.pushNamed(context, AppRoutes.sos),
+        onPressed: () {
+          HapticFeedback.heavyImpact(); // ← ADD THIS
+          Navigator.pushNamed(context, AppRoutes.sos);
+        },
         backgroundColor: AppTheme.errorRed,
         icon: const Icon(Icons.sos, color: Colors.white),
         label: const Text('SOS', style: TextStyle(color: Colors.white)),
@@ -355,6 +563,9 @@ class _QueueTab extends StatelessWidget {
   final Function(bool, String?) onActiveEntryChanged;
   final Function(String) onLeaveQueue;
   final Function(String, String?) onCompleteTrip;
+  final VoidCallback onBookingAccepted;
+  final Function(String) onCallPassenger; // ← ADD
+  final Function(String) onMessagePassenger; // ← ADD
 
   const _QueueTab({
     required this.uid,
@@ -364,6 +575,9 @@ class _QueueTab extends StatelessWidget {
     required this.onActiveEntryChanged,
     required this.onLeaveQueue,
     required this.onCompleteTrip,
+    required this.onBookingAccepted,
+    required this.onCallPassenger, // ← ADD
+    required this.onMessagePassenger, // ← ADD
   });
 
   @override
@@ -398,6 +612,74 @@ class _QueueTab extends StatelessWidget {
                         : "We'll let you know when you arrive at a terminal.",
                     style: const TextStyle(color: Colors.white70, fontSize: 13),
                   ),
+
+                  // ─── ADD THIS: Cooldown warning ───
+                  FutureBuilder<DocumentSnapshot>(
+                    future: FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(uid)
+                        .get(),
+                    builder: (context, userSnap) {
+                      if (!userSnap.hasData || userSnap.data == null) {
+                        return const SizedBox.shrink();
+                      }
+
+                      final userData =
+                          userSnap.data!.data() as Map<String, dynamic>?;
+                      if (userData == null) return const SizedBox.shrink();
+
+                      final cooldownUntil =
+                          userData['queueCooldownUntil'] as Timestamp?;
+
+                      if (cooldownUntil == null) return const SizedBox.shrink();
+
+                      final cooldownEnd = cooldownUntil.toDate().add(
+                        const Duration(minutes: 20),
+                      );
+                      final now = DateTime.now();
+                      if (now.isAfter(cooldownEnd)) {
+                        return const SizedBox.shrink();
+                      }
+
+                      final remaining = cooldownEnd.difference(now);
+                      final minutesLeft = remaining.inMinutes + 1;
+
+                      return Container(
+                        margin: const EdgeInsets.only(top: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withValues(alpha: 0.25),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: Colors.orange.withValues(alpha: 0.5),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.timer,
+                              color: AppTheme.warning,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Cooldown: You can re-join in $minutesLeft minute(s)',
+                                style: const TextStyle(
+                                  color: AppTheme.warning,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
                 ],
               ),
             ),
@@ -406,7 +688,10 @@ class _QueueTab extends StatelessWidget {
                 stream: FirebaseFirestore.instance
                     .collection('queueEntries')
                     .where('driverId', isEqualTo: uid)
-                    .where('status', whereIn: ['waiting', 'dispatched'])
+                    .where(
+                      'status',
+                      whereIn: ['waiting', 'dispatched', 'accepted'],
+                    )
                     .snapshots(),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
@@ -421,14 +706,17 @@ class _QueueTab extends StatelessWidget {
                   final activeData =
                       activeEntry?.data() as Map<String, dynamic>?;
                   final isDispatched = activeData?['status'] == 'dispatched';
+                  final isAccepted = activeData?['status'] == 'accepted';
                   final bookingId = activeData?['bookingId'] as String?;
 
                   WidgetsBinding.instance.addPostFrameCallback((_) {
+                    debugPrint(
+                      '📋 Queue entry: status=${activeData?['status']}, bookingId=$bookingId',
+                    );
                     onActiveEntryChanged(
                       activeEntry != null,
-                      isDispatched ? bookingId : null,
+                      (isDispatched || isAccepted) ? bookingId : null,
                     );
-                    // Show notification when dispatched
                     if (isDispatched && bookingId != null) {
                       NotificationService.instance.showDispatchNotification(
                         driverName: activeData?['driverName'] ?? 'Driver',
@@ -451,6 +739,10 @@ class _QueueTab extends StatelessWidget {
                         data['bookingId'] as String?,
                       );
                     },
+                    onBookingAccepted:
+                        onBookingAccepted, // ADD THIS - pass it through
+                    onCallPassenger: onCallPassenger, // ← ADD
+                    onMessagePassenger: onMessagePassenger, // ← ADD
                   );
                 },
               ),
@@ -461,6 +753,8 @@ class _QueueTab extends StatelessWidget {
     );
   }
 }
+
+// ─── No Queue View ────────────────────────────────────────────────────────────
 
 class _NoQueueView extends StatelessWidget {
   final bool isWatching;
@@ -477,7 +771,7 @@ class _NoQueueView extends StatelessWidget {
             Icon(
               isWatching ? Icons.my_location : Icons.location_off,
               size: 64,
-              color: Colors.grey,
+              color: AppTheme.textMuted,
             ),
             const SizedBox(height: 16),
             Text(
@@ -485,7 +779,7 @@ class _NoQueueView extends StatelessWidget {
                   ? "You're not in a queue yet.\nDrive to a terminal — we'll let you know when you arrive."
                   : 'Location is off.\nEnable it in Settings to auto check-in.',
               textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.grey, fontSize: 15),
+              style: const TextStyle(color: AppTheme.textMuted, fontSize: 15),
             ),
           ],
         ),
@@ -494,29 +788,131 @@ class _NoQueueView extends StatelessWidget {
   }
 }
 
-class _ActiveQueueView extends StatelessWidget {
+// ─── Active Queue View ────────────────────────────────────────────────────────
+
+class _ActiveQueueView extends StatefulWidget {
   final QueryDocumentSnapshot entry;
   final VoidCallback onLeaveQueue;
   final VoidCallback onCompleteTrip;
+  final VoidCallback onBookingAccepted;
+  final Function(String) onCallPassenger; // ← ADD
+  final Function(String) onMessagePassenger; // ← ADD
 
   const _ActiveQueueView({
     required this.entry,
     required this.onLeaveQueue,
     required this.onCompleteTrip,
+    required this.onBookingAccepted,
+    required this.onCallPassenger, // ← ADD
+    required this.onMessagePassenger, // ← ADD
   });
 
   @override
+  State<_ActiveQueueView> createState() => _ActiveQueueViewState();
+}
+
+class _ActiveQueueViewState extends State<_ActiveQueueView> {
+  bool _isAccepting = false;
+  bool _isHighlightingDestination = false;
+
+  Future<void> _acceptBooking(
+    BuildContext context,
+    Map<String, dynamic> data,
+  ) async {
+    if (_isAccepting) return;
+    _isAccepting = true;
+
+    final bookingId = data['bookingId'] as String?;
+    final queueEntryId = widget.entry.id;
+    if (bookingId == null) {
+      _isAccepting = false;
+      return;
+    }
+
+    try {
+      // Route the booking through the state machine so the transition is
+      // validated and the passenger's screen picks it up straight away.
+      await TripService.instance.moveTrip(
+        bookingId: bookingId,
+        to: TripStatus.driverAccepted,
+        by: TripRole.driver,
+      );
+      // The queue entry is this driver's own bookkeeping, not shared state.
+      await FirebaseFirestore.instance
+          .collection('queueEntries')
+          .doc(queueEntryId)
+          .update({
+            'status': 'accepted',
+            'acceptedAt': FieldValue.serverTimestamp(),
+          });
+      HapticFeedback.mediumImpact();
+
+      widget.onBookingAccepted();
+
+      if (!context.mounted) {
+        _isAccepting = false;
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✅ Booking accepted!'),
+          backgroundColor: AppTheme.success,
+        ),
+      );
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              e is TripTransitionException
+                  ? e.message
+                  : 'Couldn\'t accept the booking. Check your connection and '
+                        'try again.',
+            ),
+            backgroundColor: AppTheme.errorRed,
+          ),
+        );
+      }
+    }
+    _isAccepting = false;
+  }
+
+  Widget _fareRow(String label, String value) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+        Text(
+          value,
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+        ),
+      ],
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final data = entry.data() as Map<String, dynamic>;
-    final terminalId = data['terminalId'];
+    final data = widget.entry.data() as Map<String, dynamic>? ?? {};
+    final terminalId = data['terminalId'] ?? '';
     final terminalName = data['terminalName'] ?? 'Terminal';
     final status = data['status'] ?? 'waiting';
+    final checkedInAt = data['checkedInAt'] as Timestamp?;
+
+    String waitingDuration = 'Just now';
+    if (checkedInAt != null) {
+      final duration = DateTime.now().difference(checkedInAt.toDate());
+      if (duration.inHours > 0) {
+        waitingDuration = '${duration.inHours}h ${duration.inMinutes % 60}m';
+      } else if (duration.inMinutes > 0) {
+        waitingDuration = '${duration.inMinutes}m';
+      }
+    }
 
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('queueEntries')
           .where('terminalId', isEqualTo: terminalId)
-          .where('status', isEqualTo: 'waiting')
+          .where('status', whereIn: ['waiting', 'accepted'])
           .orderBy('checkedInAt')
           .snapshots(),
       builder: (context, snapshot) {
@@ -525,119 +921,880 @@ class _ActiveQueueView extends StatelessWidget {
             padding: const EdgeInsets.all(24),
             child: Text(
               'Queue error:\n${snapshot.error}',
-              style: const TextStyle(color: Colors.red),
+              style: const TextStyle(color: AppTheme.errorRed),
             ),
           );
         }
-
         final waitingDocs = snapshot.data?.docs ?? [];
-        final position = waitingDocs.indexWhere((d) => d.id == entry.id) + 1;
+        final position =
+            waitingDocs.indexWhere((d) => d.id == widget.entry.id) + 1;
         final total = waitingDocs.length;
+        final driversAhead = position > 0 ? position - 1 : 0;
+        final estimatedMinutes = driversAhead * 10;
+        String estimatedWait = '';
+        if (estimatedMinutes >= 60) {
+          estimatedWait =
+              '~${estimatedMinutes ~/ 60}h ${estimatedMinutes % 60}m';
+        } else if (estimatedMinutes > 0) {
+          estimatedWait = '~$estimatedMinutes min';
+        } else {
+          estimatedWait = "You're next! 🎉";
+        }
+        String nextDriver = 'You';
+        if (position == 1) {
+          nextDriver = 'You are next! 🎯';
+        } else if (waitingDocs.isNotEmpty) {
+          final d = waitingDocs.first.data() as Map<String, dynamic>? ?? {};
+          nextDriver = '${d['driverName'] ?? 'Driver'} is next';
+        }
 
         return Padding(
           padding: const EdgeInsets.all(24),
-          child: Column(
-            children: [
-              Card(
-                elevation: 2,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    children: [
-                      Text(
-                        terminalName,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      if (status == 'dispatched') ...[
-                        const Icon(
-                          Icons.electric_rickshaw,
-                          color: AppTheme.primaryGreen,
-                          size: 48,
-                        ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          "You've been dispatched!",
-                          style: TextStyle(
-                            fontSize: 16,
+          child: SingleChildScrollView(
+            child: Column(
+              children: [
+                Card(
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      children: [
+                        Text(
+                          terminalName,
+                          style: const TextStyle(
+                            fontSize: 18,
                             fontWeight: FontWeight.bold,
-                            color: AppTheme.primaryGreen,
                           ),
                         ),
                         const SizedBox(height: 4),
-                        const Text(
-                          'Head to the passenger pickup point.',
-                          style: TextStyle(color: Colors.grey),
-                        ),
-                      ] else ...[
                         Text(
-                          position > 0 ? '#$position' : '—',
+                          'Joined $waitingDuration ago',
                           style: const TextStyle(
-                            fontSize: 48,
-                            fontWeight: FontWeight.bold,
-                            color: AppTheme.primaryGreen,
+                            color: AppTheme.textMuted,
+                            fontSize: 12,
                           ),
                         ),
-                        Text(
-                          'of $total waiting',
-                          style: const TextStyle(color: Colors.grey),
-                        ),
+                        const SizedBox(height: 20),
+
+                        if (status == 'dispatched') ...[
+                          const Icon(
+                            Icons.electric_rickshaw,
+                            color: AppTheme.primaryGreen,
+                            size: 48,
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            "You've been dispatched!",
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.primaryGreen,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'Accept the booking to see pickup location.',
+                            style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                          ),
+                          const SizedBox(height: 16),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: () => _acceptBooking(context, data),
+                              icon: const Icon(
+                                Icons.check_circle,
+                                color: Colors.white,
+                              ),
+                              label: const Text(
+                                'Accept Booking',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.success,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 14,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+
+                        if (status == 'accepted') ...[
+                          const Icon(
+                            Icons.check_circle,
+                            color: AppTheme.success,
+                            size: 40,
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            "Booking Accepted!",
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.success,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'Navigate to the pickup location.',
+                            style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Everything in a StreamBuilder for live updates
+                          StreamBuilder<DocumentSnapshot>(
+                            stream: FirebaseFirestore.instance
+                                .collection('bookings')
+                                .doc(data['bookingId'] as String? ?? '')
+                                .snapshots(),
+                            builder: (context, bookingSnap) {
+                              if (!bookingSnap.hasData) {
+                                return const SizedBox.shrink();
+                              }
+
+                              final bookingData =
+                                  bookingSnap.data!.data()
+                                      as Map<String, dynamic>?;
+                              final distance =
+                                  bookingData?['distance'] as num? ?? 0;
+                              final fare = bookingData?['fare'] as num? ?? 0;
+                              final paymentStatus =
+                                  bookingData?['paymentStatus'] ?? 'pending';
+                              final paymentMethod =
+                                  bookingData?['paymentMethod'] ?? 'cash';
+
+                              return Column(
+                                children: [
+                                  // Fare details
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.primaryBlue.withValues(
+                                        alpha: 0.05,
+                                      ),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: AppTheme.primaryBlue.withValues(
+                                          alpha: 0.2,
+                                        ),
+                                      ),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          '💰 FARE DETAILS',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                            color: AppTheme.primaryBlue,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        _fareRow(
+                                          'Distance',
+                                          '${distance.toStringAsFixed(2)} km',
+                                        ),
+                                        const SizedBox(height: 4),
+                                        _fareRow(
+                                          'Fare',
+                                          '₱${fare.toStringAsFixed(0)}',
+                                        ),
+                                        const Divider(height: 12),
+                                        Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            const Text(
+                                              'Total to Receive',
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                            Text(
+                                              '₱${fare.toStringAsFixed(0)}',
+                                              style: const TextStyle(
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.bold,
+                                                color: AppTheme.primaryGreen,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Row(
+                                          children: [
+                                            Icon(
+                                              paymentStatus == 'paid'
+                                                  ? Icons.check_circle
+                                                  : Icons.schedule,
+                                              color: paymentStatus == 'paid'
+                                                  ? AppTheme.success
+                                                  : AppTheme.textMuted,
+                                              size: 16,
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Expanded(
+                                              child: Text(
+                                                paymentStatus == 'paid'
+                                                    ? '✅ Passenger paid: ₱${fare.toStringAsFixed(0)} via ${paymentMethod == 'gcash' ? 'GCash' : 'Cash'}'
+                                                    : 'Payment due after the trip ends',
+                                                style: TextStyle(
+                                                  color: paymentStatus == 'paid'
+                                                      ? AppTheme.success
+                                                      : AppTheme.textMuted,
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+
+                                  // Navigation buttons
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: OutlinedButton.icon(
+                                          onPressed: () {
+                                            setState(
+                                              () => _isHighlightingDestination =
+                                                  false,
+                                            );
+                                            ScaffoldMessenger.of(
+                                              context,
+                                            ).showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  '📍 Mini map now shows pickup location',
+                                                ),
+                                                duration: Duration(seconds: 1),
+                                              ),
+                                            );
+                                          },
+                                          icon: const Icon(
+                                            Icons.navigation,
+                                            size: 16,
+                                          ),
+                                          label: const Text(
+                                            'Go to Pickup',
+                                            style: TextStyle(fontSize: 11),
+                                          ),
+                                          style: OutlinedButton.styleFrom(
+                                            foregroundColor: AppTheme.warning,
+                                            side: BorderSide(
+                                              color: _isHighlightingDestination
+                                                  ? Colors.orange.withValues(
+                                                      alpha: 0.3,
+                                                    )
+                                                  : AppTheme.warning,
+                                              width: _isHighlightingDestination
+                                                  ? 1
+                                                  : 2,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: OutlinedButton.icon(
+                                          onPressed: () {
+                                            setState(
+                                              () => _isHighlightingDestination =
+                                                  true,
+                                            );
+                                            ScaffoldMessenger.of(
+                                              context,
+                                            ).showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  '📍 Mini map now shows destination',
+                                                ),
+                                                duration: Duration(seconds: 1),
+                                              ),
+                                            );
+                                          },
+                                          icon: const Icon(
+                                            Icons.navigation,
+                                            size: 16,
+                                          ),
+                                          label: const Text(
+                                            'Go to Destination',
+                                            style: TextStyle(fontSize: 11),
+                                          ),
+                                          style: OutlinedButton.styleFrom(
+                                            foregroundColor: AppTheme.errorRed,
+                                            side: BorderSide(
+                                              color: _isHighlightingDestination
+                                                  ? AppTheme.errorRed
+                                                  : Colors.red.withValues(
+                                                      alpha: 0.3,
+                                                    ),
+                                              width: _isHighlightingDestination
+                                                  ? 2
+                                                  : 1,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+
+                                  const SizedBox(height: 12),
+
+                                  MiniMapWidget(
+                                    bookingId: data['bookingId'] as String?,
+                                    highlightDestination:
+                                        _isHighlightingDestination,
+                                  ),
+                                  const SizedBox(height: 16),
+                                  // Every driver action for this trip comes
+                                  // from the shared backend state, so only
+                                  // the one valid next step is ever offered.
+                                  if (data['bookingId'] != null)
+                                    TripActionPanel(
+                                      bookingId: data['bookingId'] as String,
+                                      onTripFinished: widget.onCompleteTrip,
+                                    ),
+                                ],
+                              );
+                            },
+                          ),
+                          const SizedBox(height: 12),
+
+                          // Passenger info card (always show)
+                          FutureBuilder<DocumentSnapshot>(
+                            future: FirebaseFirestore.instance
+                                .collection('users')
+                                .doc(data['passengerId'] as String? ?? '')
+                                .get(),
+                            builder: (context, passengerSnap) {
+                              if (!passengerSnap.hasData) {
+                                return const SizedBox.shrink();
+                              }
+
+                              final passengerData =
+                                  passengerSnap.data!.data()
+                                      as Map<String, dynamic>?;
+                              final passengerName =
+                                  passengerData?['name'] ?? 'Passenger';
+                              final passengerPhoto =
+                                  passengerData?['profilePhotoUrl'] as String?;
+                              final passengerPhone =
+                                  passengerData?['phone'] as String?;
+
+                              return Column(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.blue.withValues(
+                                        alpha: 0.05,
+                                      ),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: Colors.blue.withValues(
+                                          alpha: 0.2,
+                                        ),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        CircleAvatar(
+                                          radius: 24,
+                                          backgroundColor:
+                                              AppTheme.primaryGreen,
+                                          backgroundImage:
+                                              passengerPhoto != null
+                                              ? NetworkImage(passengerPhoto)
+                                              : null,
+                                          child: passengerPhoto == null
+                                              ? Text(
+                                                  passengerName
+                                                      .substring(0, 1)
+                                                      .toUpperCase(),
+                                                  style: const TextStyle(
+                                                    fontSize: 18,
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                )
+                                              : null,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              const Text(
+                                                'Passenger',
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: AppTheme.textMuted,
+                                                ),
+                                              ),
+                                              Text(
+                                                passengerName,
+                                                style: const TextStyle(
+                                                  fontSize: 15,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                              if (passengerPhone != null)
+                                                Text(
+                                                  passengerPhone,
+                                                  style: const TextStyle(
+                                                    fontSize: 12,
+                                                    color: AppTheme.textMuted,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  if (passengerPhone != null) ...[
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: OutlinedButton.icon(
+                                            onPressed: () =>
+                                                widget.onCallPassenger(
+                                                  passengerPhone,
+                                                ),
+                                            icon: const Icon(
+                                              Icons.call,
+                                              size: 16,
+                                            ),
+                                            label: const Text(
+                                              'Call',
+                                              style: TextStyle(fontSize: 12),
+                                            ),
+                                            style: OutlinedButton.styleFrom(
+                                              foregroundColor:
+                                                  AppTheme.primaryBlue,
+                                              side: const BorderSide(
+                                                color: AppTheme.primaryBlue,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: OutlinedButton.icon(
+                                            onPressed: () =>
+                                                widget.onMessagePassenger(
+                                                  passengerPhone,
+                                                ),
+                                            icon: const Icon(
+                                              Icons.message,
+                                              size: 16,
+                                            ),
+                                            label: const Text(
+                                              'Message',
+                                              style: TextStyle(fontSize: 12),
+                                            ),
+                                            style: OutlinedButton.styleFrom(
+                                              foregroundColor:
+                                                  AppTheme.primaryGreen,
+                                              side: const BorderSide(
+                                                color: AppTheme.primaryGreen,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ],
+                              );
+                            },
+                          ),
+                        ],
+
+                        if (status == 'waiting') ...[
+                          Text(
+                            position > 0 ? '#$position' : '—',
+                            style: const TextStyle(
+                              fontSize: 56,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.primaryGreen,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'of $total in queue',
+                            style: const TextStyle(
+                              color: AppTheme.textMuted,
+                              fontSize: 14,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          if (total > 1)
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: LinearProgressIndicator(
+                                value: position > 0
+                                    ? (total - position + 1) / total
+                                    : 0,
+                                backgroundColor: Colors.grey.shade200,
+                                color: AppTheme.primaryGreen,
+                                minHeight: 6,
+                              ),
+                            ),
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: estimatedMinutes > 0
+                                  ? Colors.blue.withValues(alpha: 0.1)
+                                  : Colors.green.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.timer_outlined,
+                                  size: 18,
+                                  color: estimatedMinutes > 0
+                                      ? AppTheme.info
+                                      : AppTheme.success,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  estimatedWait,
+                                  style: TextStyle(
+                                    color: estimatedMinutes > 0
+                                        ? AppTheme.info
+                                        : AppTheme.success,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            nextDriver,
+                            style: TextStyle(
+                              color: position == 1
+                                  ? AppTheme.success
+                                  : Colors.grey.shade600,
+                              fontSize: 12,
+                              fontWeight: position == 1
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 24),
-              if (status == 'waiting')
-                OutlinedButton.icon(
-                  onPressed: () => _confirmLeave(context),
-                  icon: const Icon(Icons.exit_to_app, color: Colors.red),
-                  label: const Text(
-                    'Leave Queue',
-                    style: TextStyle(color: Colors.red),
+                const SizedBox(height: 24),
+                if (status == 'waiting')
+                  OutlinedButton.icon(
+                    onPressed: () => _confirmLeave(context, data),
+                    icon: const Icon(Icons.exit_to_app, color: AppTheme.errorRed),
+                    label: const Text(
+                      'Leave Queue',
+                      style: TextStyle(color: AppTheme.errorRed),
+                    ),
                   ),
-                ),
-              if (status == 'dispatched')
-                ElevatedButton.icon(
-                  onPressed: onCompleteTrip,
-                  icon: const Icon(Icons.check_circle_outline),
-                  label: const Text('Complete Trip'),
-                ),
-            ],
+              ],
+            ),
           ),
         );
       },
     );
   }
 
-  void _confirmLeave(BuildContext context) {
+  void _confirmLeave(BuildContext context, Map<String, dynamic> data) {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         title: const Text('Leave the queue?'),
         content: const Text(
-          "You'll lose your spot and need to check in again.",
+          "You'll lose your spot and need to check in again.\n\nNote: There's a 20-minute cooldown before you can re-join.",
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancel'),
           ),
           TextButton(
             onPressed: () {
-              Navigator.pop(context);
-              onLeaveQueue();
+              Navigator.pop(ctx);
+              widget.onLeaveQueue();
             },
-            child: const Text('Leave', style: TextStyle(color: Colors.red)),
+            child: const Text('Leave', style: TextStyle(color: AppTheme.errorRed)),
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─── Mini Map Widget ──────────────────────────────────────────────────────────
+
+class MiniMapWidget extends StatefulWidget {
+  final String? bookingId;
+  final bool highlightDestination;
+
+  const MiniMapWidget({
+    super.key,
+    required this.bookingId,
+    this.highlightDestination = false,
+  });
+
+  @override
+  State<MiniMapWidget> createState() => _MiniMapWidgetState();
+}
+
+class _MiniMapWidgetState extends State<MiniMapWidget> {
+  final MapController _mapController = MapController();
+  LatLng? _lastDriverPoint;
+
+  void _recenterOnDriver() {
+    if (_lastDriverPoint != null) {
+      _mapController.move(_lastDriverPoint!, 15);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.bookingId == null) return const SizedBox.shrink();
+
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(widget.bookingId)
+          .snapshots(),
+      builder: (context, bookingSnap) {
+        if (!bookingSnap.hasData) {
+          return const SizedBox(
+            height: 200,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        final bookingData = bookingSnap.data!.data() as Map<String, dynamic>?;
+
+        final pickupLat = bookingData?['pickupLatitude'] as double?;
+        final pickupLng = bookingData?['pickupLongitude'] as double?;
+        final driverLat = bookingData?['driverLatitude'] as double?;
+        final driverLng = bookingData?['driverLongitude'] as double?;
+        final destinationLat = bookingData?['destinationLatitude'] as double?;
+        final destinationLng = bookingData?['destinationLongitude'] as double?;
+
+        if (pickupLat == null || pickupLng == null) {
+          return Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.warning_amber, color: AppTheme.warning, size: 16),
+                SizedBox(width: 8),
+                Text(
+                  'Pickup location not set',
+                  style: TextStyle(color: AppTheme.warning, fontSize: 13),
+                ),
+              ],
+            ),
+          );
+        }
+
+        final pickupPoint = LatLng(pickupLat, pickupLng);
+        final driverPoint = (driverLat != null && driverLng != null)
+            ? LatLng(driverLat, driverLng)
+            : pickupPoint;
+        final destinationPoint =
+            (destinationLat != null && destinationLng != null)
+            ? LatLng(destinationLat, destinationLng)
+            : null;
+
+        // Save driver point for recenter
+        _lastDriverPoint = driverPoint;
+
+        return SizedBox(
+          height: 200,
+          child: Stack(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    initialCenter:
+                        widget.highlightDestination && destinationPoint != null
+                        ? destinationPoint
+                        : driverPoint,
+                    initialZoom: widget.highlightDestination ? 14 : 15,
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate:
+                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'com.example.toda_equeue_plus',
+                    ),
+                    // Show route based on highlight mode
+                    if (widget.highlightDestination &&
+                        destinationPoint != null &&
+                        driverLat != null) ...[
+                      _RoutingPolyline(
+                        driverPoint: driverPoint,
+                        pickupPoint: destinationPoint,
+                      ),
+                    ] else if (driverLat != null && driverLng != null) ...[
+                      _RoutingPolyline(
+                        driverPoint: driverPoint,
+                        pickupPoint: pickupPoint,
+                      ),
+                    ],
+                    MarkerLayer(
+                      markers: [
+                        Marker(
+                          point: driverPoint,
+                          width: 40,
+                          height: 40,
+                          child: const Icon(
+                            Icons.electric_rickshaw,
+                            color: AppTheme.primaryBlue,
+                            size: 30,
+                          ),
+                        ),
+                        Marker(
+                          point: pickupPoint,
+                          width: widget.highlightDestination ? 30 : 45,
+                          height: widget.highlightDestination ? 30 : 45,
+                          child: Icon(
+                            Icons.flag,
+                            color: widget.highlightDestination
+                                ? Colors.grey.withValues(alpha: 0.4)
+                                : AppTheme.warning,
+                            size: widget.highlightDestination ? 20 : 35,
+                          ),
+                        ),
+                        if (destinationPoint != null)
+                          Marker(
+                            point: destinationPoint,
+                            width: widget.highlightDestination ? 45 : 30,
+                            height: widget.highlightDestination ? 45 : 30,
+                            child: Icon(
+                              Icons.location_on,
+                              color: widget.highlightDestination
+                                  ? AppTheme.errorRed
+                                  : Colors.grey.withValues(alpha: 0.4),
+                              size: widget.highlightDestination ? 35 : 20,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              // Recenter button
+              Positioned(
+                bottom: 8,
+                right: 8,
+                child: FloatingActionButton.small(
+                  heroTag: 'minimap_recenter_${widget.bookingId ?? 'default'}',
+                  backgroundColor: Colors.white,
+                  tooltip: 'Recenter to driver',
+                  onPressed: _recenterOnDriver,
+                  child: const Icon(
+                    Icons.my_location,
+                    color: AppTheme.primaryBlue,
+                    size: 18,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ─── Routing Polyline ─────────────────────────────────────────────────────────
+
+class _RoutingPolyline extends StatefulWidget {
+  final LatLng driverPoint;
+  final LatLng pickupPoint;
+  const _RoutingPolyline({
+    required this.driverPoint,
+    required this.pickupPoint,
+  });
+
+  @override
+  State<_RoutingPolyline> createState() => _RoutingPolylineState();
+}
+
+class _RoutingPolylineState extends State<_RoutingPolyline> {
+  List<LatLng>? _routePoints;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchRoute();
+  }
+
+  @override
+  void didUpdateWidget(covariant _RoutingPolyline oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.driverPoint != widget.driverPoint ||
+        oldWidget.pickupPoint != widget.pickupPoint) {
+      _fetchRoute();
+    }
+  }
+
+  Future<void> _fetchRoute() async {
+    try {
+      final points = await RoutingService.instance.getRoute(
+        widget.driverPoint,
+        widget.pickupPoint,
+      );
+      if (mounted) setState(() => _routePoints = points);
+    } catch (e) {
+      debugPrint('OSRM routing error: $e');
+      if (mounted) setState(() => _routePoints = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final points = _routePoints ?? [widget.driverPoint, widget.pickupPoint];
+    return PolylineLayer(
+      polylines: [
+        Polyline(points: points, color: AppTheme.primaryBlue, strokeWidth: 3),
+      ],
     );
   }
 }
@@ -686,9 +1843,6 @@ class _DriverMapTabState extends State<_DriverMapTab> {
   @override
   void didUpdateWidget(covariant _DriverMapTab oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Snap to the driver's current position whenever they switch back to
-    // this tab (IndexedStack keeps this widget alive in the background,
-    // so this is the hook for "returning" to the tab).
     if (!oldWidget.isActive && widget.isActive) {
       _centerOnMe();
     }
@@ -703,8 +1857,6 @@ class _DriverMapTabState extends State<_DriverMapTab> {
   }
 
   Future<void> _startWatchingSelf() async {
-    // Get an immediate fix so the marker appears right away, instead of
-    // waiting for the first ~15m-movement update from the live stream.
     final current = await _geofence.getCurrentPosition();
     if (current != null && mounted) {
       _updateMyPosition(LatLng(current.latitude, current.longitude));
@@ -717,8 +1869,6 @@ class _DriverMapTabState extends State<_DriverMapTab> {
       return;
     }
 
-    // Independent subscription to the shared broadcast stream — does not
-    // interfere with the arrival-detection listener elsewhere.
     _positionSub = _geofence.positionStream.listen((pos) {
       if (!mounted) return;
       _updateMyPosition(LatLng(pos.latitude, pos.longitude));
@@ -731,9 +1881,6 @@ class _DriverMapTabState extends State<_DriverMapTab> {
 
   @override
   void dispose() {
-    // Only cancels this widget's own listener. The shared GPS stream
-    // keeps running for other listeners (e.g. arrival detection) and is
-    // stopped centrally by the parent screen's dispose().
     _positionSub?.cancel();
     super.dispose();
   }
@@ -779,7 +1926,6 @@ class _DriverMapTabState extends State<_DriverMapTab> {
           final point = _parseBoundaryPoint(boundary[0]);
           if (point == null) continue;
 
-          // Show assigned terminal circle, or all circles while loading
           final isAssigned =
               _assignedTerminalName == null ||
               data['name'] == _assignedTerminalName;
@@ -787,7 +1933,7 @@ class _DriverMapTabState extends State<_DriverMapTab> {
             circles.add(
               CircleMarker(
                 point: point,
-                radius: 100,
+                radius: 5,
                 useRadiusInMeter: true,
                 color: AppTheme.primaryGreen.withValues(alpha: 0.3),
                 borderColor: AppTheme.primaryGreen,
@@ -796,7 +1942,6 @@ class _DriverMapTabState extends State<_DriverMapTab> {
             );
           }
 
-          // Terminal marker
           markers.add(
             Marker(
               point: point,
@@ -839,14 +1984,14 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                               final count = qSnap.data?.docs.length ?? 0;
                               return Text(
                                 '$count driver(s) currently waiting',
-                                style: const TextStyle(color: Colors.grey),
+                                style: const TextStyle(color: AppTheme.textMuted),
                               );
                             },
                           ),
                           const SizedBox(height: 8),
                           const Text(
                             'Drive into the highlighted circle to check in automatically.',
-                            style: TextStyle(color: Colors.grey, fontSize: 12),
+                            style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
                           ),
                         ],
                       ),
@@ -865,7 +2010,7 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                             _assignedTerminalName == null ||
                                 data['name'] == _assignedTerminalName
                             ? AppTheme.primaryGreen
-                            : Colors.grey,
+                            : AppTheme.textMuted,
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
@@ -884,7 +2029,7 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                           _assignedTerminalName == null ||
                               data['name'] == _assignedTerminalName
                           ? AppTheme.primaryGreen
-                          : Colors.grey,
+                          : AppTheme.textMuted,
                       size: 24,
                     ),
                   ],
@@ -950,9 +2095,45 @@ class _DriverMapTabState extends State<_DriverMapTab> {
               right: 16,
               child: FloatingActionButton.small(
                 heroTag: 'recenter',
-                backgroundColor: AppTheme.primaryGreen,
+                backgroundColor: _myPosition != null
+                    ? AppTheme.primaryGreen
+                    : AppTheme.textMuted,
+                tooltip: 'Recenter to my location',
                 onPressed: _myPosition == null ? null : _centerOnMe,
                 child: const Icon(Icons.my_location, color: Colors.white),
+              ),
+            ),
+            Positioned(
+              bottom: 80,
+              right: 16,
+              child: Column(
+                children: [
+                  FloatingActionButton.small(
+                    heroTag: 'zoom_in',
+                    backgroundColor: Colors.white,
+                    tooltip: 'Zoom in',
+                    onPressed: () {
+                      _mapController.move(
+                        _mapController.camera.center,
+                        _zoom + 1,
+                      );
+                    },
+                    child: const Icon(Icons.add, color: Colors.black87),
+                  ),
+                  const SizedBox(height: 8),
+                  FloatingActionButton.small(
+                    heroTag: 'zoom_out',
+                    backgroundColor: Colors.white,
+                    tooltip: 'Zoom out',
+                    onPressed: () {
+                      _mapController.move(
+                        _mapController.camera.center,
+                        _zoom - 1,
+                      );
+                    },
+                    child: const Icon(Icons.remove, color: Colors.black87),
+                  ),
+                ],
               ),
             ),
           ],
@@ -961,6 +2142,8 @@ class _DriverMapTabState extends State<_DriverMapTab> {
     );
   }
 }
+
+// ─── Self Location Dot ────────────────────────────────────────────────────────
 
 class _SelfLocationDot extends StatelessWidget {
   const _SelfLocationDot();
@@ -978,7 +2161,7 @@ class _SelfLocationDot extends StatelessWidget {
           height: 16,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: Colors.blue,
+            color: AppTheme.info,
             border: Border.all(color: Colors.white, width: 2),
             boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
           ),
@@ -990,9 +2173,43 @@ class _SelfLocationDot extends StatelessWidget {
 
 // ─── Driver History Tab ───────────────────────────────────────────────────────
 
-class _DriverHistoryTab extends StatelessWidget {
+class _DriverHistoryTab extends StatefulWidget {
   final String uid;
   const _DriverHistoryTab({required this.uid});
+
+  @override
+  State<_DriverHistoryTab> createState() => _DriverHistoryTabState();
+}
+
+class _DriverHistoryTabState extends State<_DriverHistoryTab> {
+  String get uid => widget.uid;
+
+  Widget _detailRow(IconData icon, String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: AppTheme.textMuted),
+        const SizedBox(width: 8),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 11,
+                color: AppTheme.textMuted,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            Text(
+              value,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1001,25 +2218,31 @@ class _DriverHistoryTab extends StatelessWidget {
           .collection('queueEntries')
           .where('driverId', isEqualTo: uid)
           .where('status', whereIn: ['completed', 'cancelled'])
+          .orderBy('checkedInAt', descending: true)
           .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
+          return ListView(
+            padding: const EdgeInsets.all(AppSpacing.lg),
+            children: List.generate(3, (_) => const ShimmerCard()),
+          );
+        }
+        if (snapshot.hasError) {
+          return ErrorView(
+            message:
+                'We couldn\'t load your trip history. Check your connection '
+                'and try again.',
+            onRetry: () => setState(() {}),
+          );
         }
         final entries = snapshot.data?.docs ?? [];
         if (entries.isEmpty) {
-          return const Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.history, size: 64, color: Colors.grey),
-                SizedBox(height: 16),
-                Text(
-                  'No trips yet',
-                  style: TextStyle(color: Colors.grey, fontSize: 16),
-                ),
-              ],
-            ),
+          return const EmptyView(
+            icon: Icons.history,
+            title: 'No trips yet',
+            message:
+                'Check in at a terminal to join the queue. Completed trips '
+                'will be listed here.',
           );
         }
         return ListView.builder(
@@ -1028,55 +2251,329 @@ class _DriverHistoryTab extends StatelessWidget {
           itemBuilder: (context, index) {
             final data = entries[index].data() as Map<String, dynamic>;
             final status = data['status'] ?? 'completed';
+            final isCancelled = status == 'cancelled';
+
+            final checkedInAt = data['checkedInAt'] as Timestamp?;
+            final completedAt = data['completedAt'] as Timestamp?;
+            final cancelledAt = data['cancelledAt'] as Timestamp?;
+            final cancelledReason = data['cancelledReason'] as String?;
+
+            String dateStr = '';
+            String timeStr = '';
+            if (isCancelled && cancelledAt != null) {
+              final dt = cancelledAt.toDate();
+              dateStr = DateFormatter.formatDate(dt);
+              timeStr = DateFormatter.formatTime(dt);
+            } else if (completedAt != null) {
+              final dt = completedAt.toDate();
+              dateStr = DateFormatter.formatDate(dt);
+              timeStr = DateFormatter.formatTime(dt);
+            } else if (checkedInAt != null) {
+              final dt = checkedInAt.toDate();
+              dateStr = DateFormatter.formatDate(dt);
+              timeStr = DateFormatter.formatTime(dt);
+            }
+
             return Card(
               margin: const EdgeInsets.only(bottom: 12),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: ListTile(
+              child: ExpansionTile(
                 leading: CircleAvatar(
-                  backgroundColor: status == 'completed'
-                      ? Colors.green
-                      : Colors.grey,
+                  backgroundColor: isCancelled
+                      ? Colors.red.shade100
+                      : Colors.green.shade100,
                   child: Icon(
-                    status == 'completed' ? Icons.check : Icons.cancel_outlined,
-                    color: Colors.white,
+                    isCancelled ? Icons.cancel_outlined : Icons.check,
+                    color: isCancelled ? AppTheme.errorRed : AppTheme.success,
                   ),
                 ),
-                title: Text(data['terminalName'] ?? 'Terminal'),
-                subtitle: Text(
-                  status == 'completed' ? 'Trip completed' : 'Cancelled',
+                title: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        data['terminalName'] ?? 'Terminal',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    if (data['hasRating'] == true &&
+                        data['viewedRating'] != true)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppTheme.errorRed,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'NEW',
+                          style: TextStyle(
+                            fontSize: 9,
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
-                onTap: data['bookingId'] != null
-                    ? () => Navigator.pushNamed(
-                        context,
-                        AppRoutes.tripDetail,
-                        arguments: {
-                          'bookingId': data['bookingId'],
-                          'userRole': 'driver',
-                        },
-                      )
-                    : null,
+                subtitle: Text(
+                  isCancelled ? 'Cancelled — $dateStr' : 'Completed — $dateStr',
+                  style: TextStyle(
+                    color: isCancelled ? AppTheme.errorRed : AppTheme.success,
+                    fontSize: 12,
+                  ),
+                ),
                 trailing: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 8,
                     vertical: 4,
                   ),
                   decoration: BoxDecoration(
-                    color: status == 'completed'
-                        ? Colors.green.withValues(alpha: 0.1)
-                        : Colors.grey.withValues(alpha: 0.1),
+                    color: isCancelled
+                        ? Colors.red.withValues(alpha: 0.1)
+                        : Colors.green.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
                     status,
                     style: TextStyle(
-                      color: status == 'completed' ? Colors.green : Colors.grey,
+                      color: isCancelled ? AppTheme.errorRed : AppTheme.textMuted,
                       fontWeight: FontWeight.bold,
                       fontSize: 12,
                     ),
                   ),
                 ),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Divider(),
+                        _detailRow(
+                          Icons.access_time,
+                          isCancelled ? 'Left at' : 'Completed at',
+                          timeStr,
+                        ),
+                        const SizedBox(height: 8),
+                        _detailRow(Icons.calendar_today, 'Date', dateStr),
+                        if (data['passengerName'] != null) ...[
+                          const SizedBox(height: 8),
+                          _detailRow(
+                            Icons.person,
+                            'Passenger',
+                            data['passengerName'],
+                          ),
+                        ],
+                        // Fare and payment status live on the linked
+                        // booking document, not on this queue entry.
+                        if (data['bookingId'] != null)
+                          StreamBuilder<DocumentSnapshot>(
+                            stream: FirebaseFirestore.instance
+                                .collection('bookings')
+                                .doc(data['bookingId'] as String)
+                                .snapshots(),
+                            builder: (context, bookingSnap) {
+                              final bookingData =
+                                  bookingSnap.data?.data()
+                                      as Map<String, dynamic>?;
+                              if (bookingData == null) {
+                                return const SizedBox.shrink();
+                              }
+
+                              final fare = bookingData['fare'] as num?;
+                              final paymentStatus =
+                                  bookingData['paymentStatus'] ?? 'pending';
+                              final paymentMethod =
+                                  bookingData['paymentMethod'] as String?;
+                              final isPaid = paymentStatus == 'paid';
+
+                              return Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  if (fare != null) ...[
+                                    const SizedBox(height: 8),
+                                    _detailRow(
+                                      Icons.monetization_on,
+                                      'Fare',
+                                      '₱${fare.toStringAsFixed(0)}',
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _detailRow(
+                                      Icons.payment,
+                                      'Status',
+                                      isPaid
+                                          ? '✅ Paid${paymentMethod == 'gcash' ? ' (GCash)' : paymentMethod == 'cash' ? ' (Cash)' : ''}'
+                                          : paymentMethod == 'cash'
+                                          ? '⏳ Awaiting cash confirmation'
+                                          : '⏳ Awaiting passenger payment',
+                                    ),
+                                  ],
+                                  if (!isPaid && paymentMethod == 'cash')
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 12),
+                                      child: SizedBox(
+                                        width: double.infinity,
+                                        child: ElevatedButton.icon(
+                                          onPressed: () async {
+                                            await DispatchService.instance
+                                                .confirmPayment(
+                                                  bookingId:
+                                                      data['bookingId']
+                                                          as String,
+                                                  paymentMethod: 'cash',
+                                                );
+                                            if (context.mounted) {
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text(
+                                                    '✅ Cash payment confirmed!',
+                                                  ),
+                                                ),
+                                              );
+                                            }
+                                          },
+                                          icon: const Icon(
+                                            Icons.check_circle,
+                                            size: 16,
+                                          ),
+                                          label: const Text(
+                                            'Confirm Cash Received',
+                                          ),
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor:
+                                                AppTheme.primaryGreen,
+                                            foregroundColor: Colors.white,
+                                            textStyle: const TextStyle(
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              );
+                            },
+                          ),
+                        if (isCancelled && cancelledReason != null) ...[
+                          const SizedBox(height: 8),
+                          _detailRow(
+                            Icons.info_outline,
+                            'Reason',
+                            cancelledReason,
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              if (!isCancelled && data['bookingId'] != null) {
+                                Navigator.pushNamed(
+                                  context,
+                                  AppRoutes.tripDetail,
+                                  arguments: {
+                                    'bookingId': data['bookingId'],
+                                    'userRole': 'driver',
+                                  },
+                                );
+                              } else {
+                                showDialog(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    title: Row(
+                                      children: [
+                                        Icon(
+                                          isCancelled
+                                              ? Icons.cancel_outlined
+                                              : Icons.check_circle,
+                                          color: isCancelled
+                                              ? AppTheme.errorRed
+                                              : AppTheme.success,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          isCancelled
+                                              ? 'Cancelled Trip'
+                                              : 'Trip Details',
+                                        ),
+                                      ],
+                                    ),
+                                    content: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        _detailRow(
+                                          Icons.location_on,
+                                          'Terminal',
+                                          data['terminalName'] ?? 'Terminal',
+                                        ),
+                                        const SizedBox(height: 8),
+                                        _detailRow(
+                                          Icons.access_time,
+                                          'Time',
+                                          '$timeStr on $dateStr',
+                                        ),
+                                        const SizedBox(height: 8),
+                                        if (data['passengerName'] != null) ...[
+                                          _detailRow(
+                                            Icons.person,
+                                            'Passenger',
+                                            data['passengerName'],
+                                          ),
+                                          const SizedBox(height: 8),
+                                        ],
+                                        _detailRow(
+                                          Icons.info_outline,
+                                          'Status',
+                                          isCancelled
+                                              ? 'Cancelled'
+                                              : 'Completed',
+                                        ),
+                                        const SizedBox(height: 8),
+                                        if (isCancelled &&
+                                            cancelledReason != null)
+                                          _detailRow(
+                                            Icons.info_outline,
+                                            'Reason',
+                                            cancelledReason,
+                                          ),
+                                      ],
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(ctx),
+                                        child: const Text('Close'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }
+                            },
+                            icon: Icon(
+                              isCancelled
+                                  ? Icons.info_outline
+                                  : Icons.receipt_long,
+                              size: 16,
+                            ),
+                            label: Text(
+                              isCancelled
+                                  ? 'View Details'
+                                  : 'View Trip Details',
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             );
           },
@@ -1088,14 +2585,1067 @@ class _DriverHistoryTab extends StatelessWidget {
 
 // ─── Driver Profile Tab ───────────────────────────────────────────────────────
 
-class _DriverProfileTab extends StatelessWidget {
+class _DriverProfileTab extends StatefulWidget {
   final String uid;
   const _DriverProfileTab({required this.uid});
 
   @override
+  State<_DriverProfileTab> createState() => _DriverProfileTabState();
+}
+
+class _DriverProfileTabState extends State<_DriverProfileTab> {
+  bool _darkMode = false;
+
+  Future<void> _uploadProfilePicture(BuildContext context) async {
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+    final picker = ImagePicker();
+
+    // Show source selection dialog
+    final source = await showDialog<ImageSource>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Change Profile Photo'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(
+                Icons.camera_alt,
+                color: AppTheme.primaryGreen,
+              ),
+              title: const Text('Take Photo'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(
+                Icons.photo_library,
+                color: AppTheme.primaryBlue,
+              ),
+              title: const Text('Choose from Gallery'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete, color: AppTheme.errorRed),
+              title: const Text('Remove Photo'),
+              onTap: () async {
+                await FirebaseFirestore.instance
+                    .collection('users')
+                    .doc(uid)
+                    .update({'profilePhotoUrl': FieldValue.delete()});
+                if (ctx.mounted) Navigator.pop(ctx);
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('✅ Photo removed!')),
+                  );
+                }
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+
+    if (source == null) return;
+
+    final pickedFile = await picker.pickImage(
+      source: source,
+      maxWidth: 800,
+      maxHeight: 800,
+      imageQuality: 80,
+    );
+
+    if (pickedFile == null) return;
+
+    final file = File(pickedFile.path);
+    final url = await CloudinaryService.instance.uploadImage(
+      file,
+      'profile_photos/$uid',
+    );
+
+    if (url != null) {
+      await FirebaseFirestore.instance.collection('users').doc(uid).update({
+        'profilePhotoUrl': url,
+      });
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('✅ Profile photo updated!')),
+        );
+      }
+    }
+  }
+
+  void _showEditNameDialog(BuildContext context) {
+    final nameController = TextEditingController();
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+
+    // Pre-fill existing name
+    FirebaseFirestore.instance.collection('users').doc(uid).get().then((doc) {
+      nameController.text = doc.data()?['name'] ?? '';
+    });
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit Name'),
+        content: TextField(
+          controller: nameController,
+          decoration: const InputDecoration(
+            labelText: 'Full Name',
+            prefixIcon: Icon(Icons.person_outlined),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (nameController.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Name cannot be empty')),
+                );
+                return;
+              }
+              await FirebaseFirestore.instance
+                  .collection('users')
+                  .doc(uid)
+                  .update({'name': nameController.text.trim()});
+              if (ctx.mounted) Navigator.pop(ctx);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('✅ Name updated!')),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primaryGreen,
+            ),
+            child: const Text('Save', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showEditPhoneDialog(BuildContext context) {
+    final phoneController = TextEditingController();
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+
+    // Pre-fill existing phone
+    FirebaseFirestore.instance.collection('users').doc(uid).get().then((doc) {
+      phoneController.text = doc.data()?['phone'] ?? '';
+    });
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit Phone Number'),
+        content: TextField(
+          controller: phoneController,
+          keyboardType: TextInputType.phone,
+          maxLength: 11,
+          decoration: const InputDecoration(
+            labelText: 'Phone Number',
+            prefixIcon: Icon(Icons.phone_outlined),
+            counterText: '',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final phone = phoneController.text.trim();
+              if (phone.isEmpty || phone.length != 11) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Phone must be 11 digits')),
+                );
+                return;
+              }
+              if (!RegExp(r'^[0-9]+$').hasMatch(phone)) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Phone must be numbers only')),
+                );
+                return;
+              }
+              await FirebaseFirestore.instance
+                  .collection('users')
+                  .doc(uid)
+                  .update({'phone': phone});
+              if (ctx.mounted) Navigator.pop(ctx);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('✅ Phone updated!')),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primaryGreen,
+            ),
+            child: const Text('Save', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showEditLocationDialog(BuildContext context) {
+    final locationController = TextEditingController();
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+
+    // Pre-fill existing address
+    FirebaseFirestore.instance.collection('users').doc(uid).get().then((doc) {
+      locationController.text = doc.data()?['locationAddress'] ?? '';
+    });
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit Location Address'),
+        content: TextField(
+          controller: locationController,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            labelText: 'Location Address',
+            hintText: 'House no., street, barangay, city',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (locationController.text.trim().isEmpty) return;
+              await FirebaseFirestore.instance
+                  .collection('users')
+                  .doc(uid)
+                  .update({'locationAddress': locationController.text.trim()});
+              if (ctx.mounted) Navigator.pop(ctx);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('✅ Location updated!')),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primaryGreen,
+            ),
+            child: const Text('Save', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showChangePasswordDialog(BuildContext context) {
+    final currentController = TextEditingController();
+    final newController = TextEditingController();
+    final confirmController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final newPass = newController.text;
+          final confirmPass = confirmController.text;
+          final currentPass = currentController.text;
+
+          // Real-time validation checks
+          final hasMinLength = newPass.length >= 8;
+          final hasUppercase = RegExp(r'[A-Z]').hasMatch(newPass);
+          final hasNumber = RegExp(r'[0-9]').hasMatch(newPass);
+          final isDifferentFromCurrent =
+              newPass.isEmpty || newPass != currentPass;
+          final passwordsMatch = confirmPass.isEmpty || newPass == confirmPass;
+
+          return AlertDialog(
+            title: const Text('Change Password'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Current password
+                  TextField(
+                    controller: currentController,
+                    obscureText: true,
+                    onChanged: (v) => setDialogState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'Current Password',
+                      prefixIcon: Icon(Icons.lock_outline),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // New password
+                  TextField(
+                    controller: newController,
+                    obscureText: true,
+                    onChanged: (v) => setDialogState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'New Password',
+                      prefixIcon: Icon(Icons.lock_reset),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Real-time requirement indicators
+                  if (newPass.isNotEmpty) ...[
+                    const Text(
+                      'Password Requirements:',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.textMuted,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    _buildRequirementRow(hasMinLength, 'At least 8 characters'),
+                    const SizedBox(height: 2),
+                    _buildRequirementRow(
+                      hasUppercase,
+                      'At least 1 uppercase letter',
+                    ),
+                    const SizedBox(height: 2),
+                    _buildRequirementRow(hasNumber, 'At least 1 number'),
+                    const SizedBox(height: 2),
+                    _buildRequirementRow(
+                      isDifferentFromCurrent,
+                      'Different from current password',
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+
+                  // Confirm password
+                  TextField(
+                    controller: confirmController,
+                    obscureText: true,
+                    onChanged: (v) => setDialogState(() {}),
+                    decoration: InputDecoration(
+                      labelText: 'Confirm New Password',
+                      prefixIcon: const Icon(Icons.check_circle_outline),
+                      errorText: confirmPass.isNotEmpty && !passwordsMatch
+                          ? 'Passwords do not match'
+                          : null,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  final current = currentController.text;
+                  final newPass = newController.text;
+                  final confirm = confirmController.text;
+
+                  if (current.isEmpty || newPass.isEmpty || confirm.isEmpty) {
+                    return;
+                  }
+
+                  final isValid =
+                      hasMinLength &&
+                      hasUppercase &&
+                      hasNumber &&
+                      isDifferentFromCurrent &&
+                      passwordsMatch;
+
+                  if (!isValid) {
+                    return;
+                  }
+
+                  try {
+                    final user = FirebaseAuth.instance.currentUser!;
+                    final credential = EmailAuthProvider.credential(
+                      email: user.email!,
+                      password: current,
+                    );
+                    await user.reauthenticateWithCredential(credential);
+                    await user.updatePassword(newPass);
+                    if (context.mounted) {
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('✅ Password changed successfully!'),
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    if (!context.mounted) return;
+                    setDialogState(() {});
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'That current password doesn\'t match. Please try again.',
+                        ),
+                      ),
+                    );
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primaryGreen,
+                ),
+                child: const Text(
+                  'Change Password',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildRequirementRow(bool isMet, String requirement) {
+    return Row(
+      children: [
+        Icon(
+          isMet ? Icons.check_circle : Icons.cancel,
+          size: 14,
+          color: isMet ? AppTheme.success : AppTheme.errorRed,
+        ),
+        const SizedBox(width: 6),
+        Text(
+          requirement,
+          style: TextStyle(
+            fontSize: 11,
+            color: isMet ? AppTheme.success : AppTheme.errorRed,
+            fontWeight: isMet ? FontWeight.w500 : FontWeight.normal,
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showTermsDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text(
+          'Terms & Conditions',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'TODA E-QUEUE+',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.primaryGreen,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Terms and Conditions & Privacy Policy',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 13, color: AppTheme.textMuted),
+                ),
+                const SizedBox(height: 20),
+
+                const Text(
+                  '1. ACCEPTANCE OF TERMS',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'By registering and using TODA E-QUEUE+ (the "App"), you agree to be bound by these Terms and Conditions. If you do not agree, you must not use the App.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                const Text(
+                  '2. DESCRIPTION OF SERVICE',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'TODA E-QUEUE+ is a geo-fenced queue management, booking, and safety system for the Federation of Baliwag City TODA. Features include automated queue management, passenger booking, GPS trip tracking, fare calculation, and emergency SOS.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                const Text(
+                  '3. DRIVER RESPONSIBILITIES',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  '• Provide valid identification documents\n'
+                  '• Maintain a valid tricycle franchise\n'
+                  '• Follow TODA regulations and city ordinances\n'
+                  '• Stay within assigned terminal geofence when queuing\n'
+                  '• Complete accepted bookings in a timely manner\n'
+                  '• Honor the fare calculated by the system\n'
+                  '• Maintain professional conduct at all times\n'
+                  '• Report incidents or violations promptly',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                const Text(
+                  '4. PASSENGER RESPONSIBILITIES',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  '• Provide accurate booking information\n'
+                  '• Be at the designated pickup location on time\n'
+                  '• Pay the calculated fare upon trip completion\n'
+                  '• Treat drivers with respect\n'
+                  '• Use SOS feature only for genuine emergencies\n'
+                  '• Not engage in fraudulent activities',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                const Text(
+                  '5. FARE POLICY',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  '• Minimum fare: ₱35.00 (first 1 kilometer)\n'
+                  '• Additional: ₱10.00 per succeeding kilometer\n'
+                  '• Fares calculated based on GPS road distance\n'
+                  '• Payment accepted: Cash or GCash QR code\n'
+                  '• Fares are non-negotiable',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                const Text(
+                  '6. QUEUE MANAGEMENT',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  '• Drivers must be within designated geofence to join queue\n'
+                  '• Queue follows FIFO (First-In, First-Out) order\n'
+                  '• Drivers who leave queue go to the back upon re-entry\n'
+                  '• 20-minute cooldown applies after leaving queue\n'
+                  '• Unverified drivers are not permitted in the queue',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                const Text(
+                  '7. CANCELLATION POLICY',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  '• Passengers may cancel before driver accepts\n'
+                  '• Cancellation restricted after driver acceptance\n'
+                  '• Repeated cancellations may result in restrictions\n'
+                  '• Drivers who cancel without valid reason face penalties',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                const Text(
+                  '8. PRIVACY POLICY',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Information We Collect:\n'
+                  '• Name, email, phone number\n'
+                  '• GPS location during active trips\n'
+                  '• Profile photos and verification documents\n'
+                  '• Trip history and payment records\n'
+                  '• Ratings and feedback',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'How We Use Your Information:\n'
+                  '• To provide transportation services\n'
+                  '• To verify driver credentials\n'
+                  '• To process bookings and payments\n'
+                  '• To send important notifications\n'
+                  '• To respond to SOS emergencies',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Data Protection:\n'
+                  '• Data stored securely in Firebase Cloud Firestore\n'
+                  '• Personal information never sold to third parties\n'
+                  '• GPS only active during trips or queue participation\n'
+                  '• Users may request data deletion',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                const Text(
+                  '9. EMERGENCY FEATURES',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  '• SOS button sends alert with location to TODA admin\n'
+                  '• SOS should only be used in genuine emergencies\n'
+                  '• Misuse may result in account suspension',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                const Text(
+                  '10. RATING SYSTEM',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  '• Passengers may rate drivers 1-5 stars\n'
+                  '• Drivers may respond to ratings\n'
+                  '• Ratings are visible to other users\n'
+                  '• Continuous low ratings may affect privileges',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                const Text(
+                  '11. LIMITATION OF LIABILITY',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'TODA E-QUEUE+ is a platform connecting drivers and passengers. We do not provide transportation services directly and are not liable for incidents during trips.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                const Text(
+                  '12. TERMINATION',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'We reserve the right to suspend accounts for violation of terms, fraudulent activity, or misuse of emergency features.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                const Text(
+                  '13. CONTACT',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Federation of Baliwag City TODA\n'
+                  'Email: fedbaliwagtoda@gmail.com\n'
+                  'Baliwag City Hall, Bulacan',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textMuted,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _uploadGcashQr(BuildContext context) async {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 800,
+      maxHeight: 800,
+      imageQuality: 80,
+    );
+
+    if (pickedFile == null) return;
+
+    final file = File(pickedFile.path);
+    final url = await CloudinaryService.instance.uploadImage(
+      file,
+      'gcash_qr/${widget.uid}',
+    );
+
+    if (url != null) {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(widget.uid)
+          .update({'gcashQrUrl': url});
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('✅ GCash QR uploaded!')));
+      }
+    }
+  }
+
+  void _showReplyDialog(BuildContext context, String ratingId) {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reply to Rating'),
+        content: GestureDetector(
+          onTap: () => FocusScope.of(ctx).unfocus(),
+          child: TextField(
+            controller: controller,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              hintText: 'Write your reply...',
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (controller.text.trim().isEmpty) return;
+              await FirebaseFirestore.instance
+                  .collection('ratings')
+                  .doc(ratingId)
+                  .update({
+                    'driverReply': controller.text.trim(),
+                    'repliedAt': FieldValue.serverTimestamp(),
+                  });
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Send Reply'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showRatingDetails(BuildContext context, String driverId) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('ratings')
+            .where('driverId', isEqualTo: driverId)
+            .orderBy('createdAt', descending: true)
+            .snapshots(),
+        builder: (context, snapshot) {
+          final ratings = snapshot.data?.docs ?? [];
+          return Container(
+            padding: const EdgeInsets.all(24),
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.5,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Your Ratings',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 16),
+                if (ratings.isEmpty)
+                  const Center(child: Text('No ratings yet.'))
+                else
+                  Expanded(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: ratings.length,
+                      itemBuilder: (context, index) {
+                        final r = ratings[index].data() as Map<String, dynamic>;
+                        final stars = r['rating'] ?? 0;
+                        final comment = r['comment'] ?? '';
+                        final driverReply = r['driverReply'] ?? '';
+                        final date = DateFormatter.formatDate(
+                          (r['createdAt'] as Timestamp?)?.toDate(),
+                        );
+                        final passengerId = r['passengerId'] ?? '';
+                        final ratingId = ratings[index].id;
+
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    ...List.generate(
+                                      5,
+                                      (i) => Icon(
+                                        i < stars
+                                            ? Icons.star
+                                            : Icons.star_border,
+                                        color: Colors.amber,
+                                        size: 18,
+                                      ),
+                                    ),
+                                    const Spacer(),
+                                    Text(
+                                      date,
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        color: AppTheme.textMuted,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                FutureBuilder<DocumentSnapshot>(
+                                  future: FirebaseFirestore.instance
+                                      .collection('users')
+                                      .doc(passengerId)
+                                      .get(),
+                                  builder: (context, userSnap) {
+                                    final passengerName =
+                                        userSnap.data?['name'] ?? 'Passenger';
+                                    final firstLetter = passengerName
+                                        .substring(0, 1)
+                                        .toUpperCase();
+                                    return Row(
+                                      children: [
+                                        CircleAvatar(
+                                          radius: 16,
+                                          backgroundColor: AppTheme.primaryGreen
+                                              .withValues(alpha: 0.2),
+                                          child: Text(
+                                            firstLetter,
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.bold,
+                                              color: AppTheme.primaryGreen,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          passengerName,
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                                if (comment.isNotEmpty) ...[
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    comment,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      color: AppTheme.textMuted,
+                                    ),
+                                  ),
+                                ],
+                                if (driverReply.isNotEmpty) ...[
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.primaryBlue.withValues(
+                                        alpha: 0.05,
+                                      ),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: AppTheme.primaryBlue.withValues(
+                                          alpha: 0.2,
+                                        ),
+                                      ),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'Your reply:',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                            color: AppTheme.primaryBlue,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          driverReply,
+                                          style: const TextStyle(fontSize: 13),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                                if (driverReply.isEmpty) ...[
+                                  const SizedBox(height: 8),
+                                  TextButton.icon(
+                                    onPressed: () =>
+                                        _showReplyDialog(context, ratingId),
+                                    icon: const Icon(Icons.reply, size: 16),
+                                    label: const Text(
+                                      'Reply',
+                                      style: TextStyle(fontSize: 12),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _showHelpTopics(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Help Topics'),
+        content: const SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '1. How to join the queue?',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text('Drive into your assigned terminal geofence area.'),
+              SizedBox(height: 12),
+              Text(
+                '2. How to accept a booking?',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text('Tap "Accept Booking" when you get dispatched.'),
+              SizedBox(height: 12),
+              Text(
+                '3. How to use SOS?',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text('Tap the red SOS button in an emergency.'),
+              SizedBox(height: 12),
+              Text(
+                '4. How to upload GCash QR?',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text('Go to Profile → Upload GCash QR.'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return FutureBuilder<DocumentSnapshot>(
-      future: FirebaseFirestore.instance.collection('users').doc(uid).get(),
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(widget.uid)
+          .snapshots(),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
@@ -1108,41 +3658,37 @@ class _DriverProfileTab extends StatelessWidget {
           children: [
             const SizedBox(height: 24),
             Center(
-              child: Stack(
+              child: Column(
                 children: [
-                  CircleAvatar(
-                    radius: 48,
-                    backgroundColor: AppTheme.primaryBlue,
-                    child: Text(
-                      (data?['name'] ?? 'D').toString().substring(0, 1),
-                      style: const TextStyle(
-                        fontSize: 36,
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                      ),
+                  GestureDetector(
+                    onTap: () => _uploadProfilePicture(context),
+                    child: CircleAvatar(
+                      radius: 48,
+                      backgroundColor: AppTheme.primaryBlue,
+                      backgroundImage: data?['profilePhotoUrl'] != null
+                          ? NetworkImage(data!['profilePhotoUrl'])
+                          : null,
+                      child: data?['profilePhotoUrl'] == null
+                          ? Text(
+                              (data?['name'] ?? 'D').toString().substring(0, 1),
+                              style: const TextStyle(
+                                fontSize: 36,
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            )
+                          : null,
                     ),
                   ),
-                  if (isVerified)
-                    Positioned(
-                      bottom: 0,
-                      right: 0,
-                      child: Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: const BoxDecoration(
-                          color: Colors.green,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.verified,
-                          color: Colors.white,
-                          size: 16,
-                        ),
-                      ),
-                    ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Tap to change photo',
+                    style: TextStyle(fontSize: 10, color: AppTheme.textMuted),
+                  ),
                 ],
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             Center(
               child: Text(
                 data?['name'] ?? 'Driver',
@@ -1168,7 +3714,7 @@ class _DriverProfileTab extends StatelessWidget {
                 child: Text(
                   isVerified ? '✅ Verified Driver' : '⏳ Pending Verification',
                   style: TextStyle(
-                    color: isVerified ? Colors.green : Colors.orange,
+                    color: isVerified ? AppTheme.success : AppTheme.warning,
                     fontWeight: FontWeight.bold,
                     fontSize: 12,
                   ),
@@ -1176,23 +3722,43 @@ class _DriverProfileTab extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
-            // Average rating
             if ((data?['averageRating'] ?? 0) > 0)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.star, color: Colors.amber, size: 20),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${data?['averageRating']} (${data?['totalRatings']} ratings)',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
+              GestureDetector(
+                onTap: () => _showRatingDetails(context, widget.uid),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
                   ),
-                ],
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.star, color: Colors.amber, size: 20),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${data?['averageRating']} (${data?['totalRatings']} ratings)',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                          decoration: TextDecoration.underline,
+                        ),
+                      ),
+                      const Icon(
+                        Icons.chevron_right,
+                        size: 16,
+                        color: AppTheme.textMuted,
+                      ),
+                    ],
+                  ),
+                ),
               ),
             const SizedBox(height: 32),
+
+            // Personal Info Card
             Card(
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -1204,6 +3770,8 @@ class _DriverProfileTab extends StatelessWidget {
                     leading: const Icon(Icons.person_outlined),
                     title: const Text('Full Name'),
                     subtitle: Text(data?['name'] ?? ''),
+                    trailing: const Icon(Icons.edit, size: 16),
+                    onTap: () => _showEditNameDialog(context),
                   ),
                   const Divider(height: 1, indent: 16, endIndent: 16),
                   ListTile(
@@ -1216,49 +3784,237 @@ class _DriverProfileTab extends StatelessWidget {
                     leading: const Icon(Icons.phone_outlined),
                     title: const Text('Phone'),
                     subtitle: Text(data?['phone'] ?? ''),
+                    trailing: const Icon(Icons.edit, size: 16),
+                    onTap: () => _showEditPhoneDialog(context),
+                  ),
+                  const Divider(height: 1, indent: 16, endIndent: 16),
+                  // Edit Location — inside Personal Info
+                  ListTile(
+                    leading: const Icon(
+                      Icons.home_outlined,
+                      color: AppTheme.info,
+                    ),
+                    title: const Text('Location Address'),
+                    subtitle: Text(
+                      data?['locationAddress'] ?? 'Not set',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    trailing: const Icon(Icons.edit, size: 16),
+                    onTap: () => _showEditLocationDialog(context),
                   ),
                   const Divider(height: 1, indent: 16, endIndent: 16),
                   ListTile(
-                    leading: const Icon(Icons.electric_rickshaw_outlined),
-                    title: const Text('Plate Number'),
-                    subtitle: Text(data?['plateNumber'] ?? 'N/A'),
-                  ),
-                  const Divider(height: 1, indent: 16, endIndent: 16),
-                  ListTile(
-                    leading: const Icon(Icons.numbers_outlined),
-                    title: const Text('Body Number'),
-                    subtitle: Text(data?['bodyNumber'] ?? 'N/A'),
-                  ),
-                  const Divider(height: 1, indent: 16, endIndent: 16),
-                  ListTile(
-                    leading: const Icon(Icons.badge_outlined),
-                    title: const Text('ID Type'),
-                    subtitle: Text(data?['idType'] ?? 'N/A'),
-                  ),
-                  const Divider(height: 1, indent: 16, endIndent: 16),
-                  ListTile(
-                    leading: const Icon(Icons.numbers_outlined),
-                    title: const Text('ID Number'),
-                    subtitle: Text(data?['idNumber'] ?? 'N/A'),
+                    leading: const Icon(Icons.verified_user_outlined),
+                    title: const Text('Role'),
+                    subtitle: Text(data?['role'] ?? 'passenger'),
                   ),
                 ],
               ),
             ),
+            const SizedBox(height: 16),
+
+            // Privacy & Security Card
+            Card(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const ListTile(
+                    leading: Icon(Icons.shield, color: AppTheme.primaryGreen),
+                    title: Text(
+                      'Privacy & Security',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const Divider(height: 1, indent: 16, endIndent: 16),
+                  ListTile(
+                    leading: const Icon(
+                      Icons.lock_outline,
+                      color: AppTheme.warning,
+                    ),
+                    title: const Text('Change Password'),
+                    trailing: const Icon(Icons.chevron_right, size: 18),
+                    onTap: () => _showChangePasswordDialog(context),
+                  ),
+                  const Divider(height: 1, indent: 16, endIndent: 16),
+                  ListTile(
+                    leading: const Icon(
+                      Icons.description_outlined,
+                      color: AppTheme.textMuted,
+                    ),
+                    title: const Text('Terms & Conditions'),
+                    trailing: const Icon(Icons.chevron_right, size: 18),
+                    onTap: () => _showTermsDialog(context),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // GCash QR Card
+            Card(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: const Icon(
+                      Icons.qr_code,
+                      color: AppTheme.primaryGreen,
+                    ),
+                    title: const Text('GCash Payment QR'),
+                    subtitle: Text(
+                      data?['gcashQrUrl'] != null
+                          ? '✅ QR Code uploaded'
+                          : 'No QR code uploaded yet',
+                    ),
+                  ),
+                  if (data?['gcashQrUrl'] != null)
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Image.network(
+                        data!['gcashQrUrl'],
+                        height: 200,
+                        fit: BoxFit.contain,
+                      ),
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: OutlinedButton.icon(
+                      onPressed: () => _uploadGcashQr(context),
+                      icon: const Icon(Icons.upload),
+                      label: const Text('Upload GCash QR'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Settings Card
+            Card(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    secondary: const Icon(Icons.dark_mode_outlined),
+                    title: const Text('Dark Mode'),
+                    subtitle: const Text('Use dark theme'),
+                    value: _darkMode,
+                    onChanged: (value) {
+                      setState(() => _darkMode = value);
+                      ThemeController.instance.toggleTheme(value);
+                    },
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // About Card
+            Card(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.info_outlined),
+                    title: const Text('About App'),
+                    subtitle: const Text('TODA E-QUEUE+ v1.0.0'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      showAboutDialog(
+                        context: context,
+                        applicationName: 'TODA E-QUEUE+',
+                        applicationVersion: 'v1.0.0',
+                        applicationLegalese: 'Federation of Baliwag City TODA',
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Help Center Card
+            Card(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.bug_report, color: AppTheme.warning),
+                    title: const Text('Send Ticket / Report Issue'),
+                    trailing: const Icon(Icons.chevron_right, size: 18),
+                    onTap: () =>
+                        Navigator.pushNamed(context, AppRoutes.sendTicket),
+                  ),
+                  const Divider(height: 1, indent: 16, endIndent: 16),
+                  ListTile(
+                    leading: const Icon(Icons.help_outlined),
+                    title: const Text('Help Topics'),
+                    subtitle: const Text('Frequently asked questions'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => _showHelpTopics(context),
+                  ),
+                ],
+              ),
+            ),
+
             const SizedBox(height: 24),
             OutlinedButton.icon(
               onPressed: () async {
-                await FirebaseAuth.instance.signOut();
-                if (context.mounted) {
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Sign Out'),
+                    content: const Text('Are you sure you want to sign out?'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: const Text(
+                          'Sign Out',
+                          style: TextStyle(color: AppTheme.errorRed),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirm == true && context.mounted) {
+                  await FirebaseAuth.instance.signOut();
+                  if (!context.mounted) return;
                   Navigator.pushReplacementNamed(context, AppRoutes.login);
                 }
               },
-              icon: const Icon(Icons.logout, color: Colors.red),
+              icon: const Icon(Icons.logout, color: AppTheme.errorRed),
               label: const Text(
                 'Sign Out',
-                style: TextStyle(color: Colors.red),
+                style: TextStyle(color: AppTheme.errorRed),
               ),
             ),
-            const SizedBox(height: 80),
+            const SizedBox(height: 24),
+            const Center(
+              child: Text(
+                'TODA E-QUEUE+ v1.0.0',
+                style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+              ),
+            ),
+            const SizedBox(height: 8),
           ],
         );
       },

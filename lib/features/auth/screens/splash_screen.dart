@@ -36,8 +36,9 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   void _navigateAfterDelay() async {
-    await Future.delayed(const Duration(seconds: 3));
+    await Future.delayed(const Duration(seconds: 2));
     if (!mounted) return;
+
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       Navigator.pushReplacementNamed(context, AppRoutes.roleSelect);
@@ -68,7 +69,7 @@ class _SplashScreenState extends State<SplashScreen>
                   width: 120,
                   height: 120,
                   decoration: BoxDecoration(
-                    color: AppTheme.white,
+                    color: Colors.white,
                     borderRadius: BorderRadius.circular(24),
                     boxShadow: [
                       BoxShadow(
@@ -78,10 +79,14 @@ class _SplashScreenState extends State<SplashScreen>
                       ),
                     ],
                   ),
-                  child: const Icon(
-                    Icons.electric_rickshaw,
-                    size: 72,
-                    color: AppTheme.primaryGreen,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(24),
+                    child: Image.asset(
+                      'assets/images/toda_equeue_plus_logo.png',
+                      width: 100,
+                      height: 100,
+                      fit: BoxFit.cover,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 24),

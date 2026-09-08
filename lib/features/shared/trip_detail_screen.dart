@@ -3,8 +3,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import '../../config/theme.dart';
 import '../../config/routes.dart';
+import '../../core/services/geocoding_service.dart';
 
-class TripDetailScreen extends StatelessWidget {
+class TripDetailScreen extends StatefulWidget {
   final String bookingId;
   final String userRole;
 
@@ -15,13 +16,70 @@ class TripDetailScreen extends StatelessWidget {
   });
 
   @override
+  State<TripDetailScreen> createState() => _TripDetailScreenState();
+}
+
+class _TripDetailScreenState extends State<TripDetailScreen> {
+  String _pickupName = 'Loading...';
+  String _destinationName = 'Loading...';
+
+  bool _placeNamesLoaded = false;
+
+  Future<void> _getPlaceNames(Map<String, dynamic> data) async {
+    if (_placeNamesLoaded) return; // ← Prevent infinite loop
+    _placeNamesLoaded = true;
+
+    if (data['pickupLatitude'] != null && data['pickupLongitude'] != null) {
+      _pickupName = await GeocodingService.instance.getPlaceName(
+        data['pickupLatitude'] as double,
+        data['pickupLongitude'] as double,
+      );
+    }
+    if (data['destinationLatitude'] != null &&
+        data['destinationLongitude'] != null) {
+      _destinationName = await GeocodingService.instance.getPlaceName(
+        data['destinationLatitude'] as double,
+        data['destinationLongitude'] as double,
+      );
+    }
+    if (mounted) setState(() {});
+  }
+
+  Color _statusColor(String status) {
+    return switch (status) {
+      'assigned' => AppTheme.primaryBlue,
+      'completed' => AppTheme.success,
+      'cancelled' => AppTheme.textMuted,
+      _ => AppTheme.textMuted,
+    };
+  }
+
+  IconData _statusIcon(String status) {
+    return switch (status) {
+      'assigned' => Icons.electric_rickshaw,
+      'completed' => Icons.check_circle,
+      'cancelled' => Icons.cancel,
+      _ => Icons.info,
+    };
+  }
+
+  String _statusLabel(String status) {
+    return switch (status) {
+      'assigned' => 'Trip In Progress',
+      'completed' => 'Trip Completed',
+      'cancelled' => 'Trip Cancelled',
+      _ => 'Unknown Status',
+    };
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Trip Details')),
       body: FutureBuilder<DocumentSnapshot>(
         future: FirebaseFirestore.instance
             .collection('bookings')
-            .doc(bookingId)
+            .doc(widget.bookingId)
             .get(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -32,6 +90,12 @@ class TripDetailScreen extends StatelessWidget {
           }
 
           final data = snapshot.data!.data() as Map<String, dynamic>;
+
+          // Fetch place names (only once)
+          if (!_placeNamesLoaded) {
+            _getPlaceNames(data);
+          }
+
           final status = data['status'] ?? 'unknown';
           final terminalName = data['terminalName'] ?? 'Unknown Terminal';
           final driverName = data['driverName'] ?? 'Unknown Driver';
@@ -59,8 +123,7 @@ class TripDetailScreen extends StatelessWidget {
                 : '${diff.inHours}h ${diff.inMinutes % 60}m';
           }
 
-          // The "other person" — who the current user wants to see
-          final otherPersonId = userRole == 'passenger'
+          final otherPersonId = widget.userRole == 'passenger'
               ? driverId
               : passengerId;
 
@@ -119,7 +182,7 @@ class TripDetailScreen extends StatelessWidget {
                       ),
                       const Divider(height: 1, indent: 16, endIndent: 16),
 
-                      // Tappable other person row
+                      // Other person with profile photo
                       FutureBuilder<DocumentSnapshot>(
                         future: FirebaseFirestore.instance
                             .collection('users')
@@ -130,23 +193,40 @@ class TripDetailScreen extends StatelessWidget {
                               userSnap.data?.data() as Map<String, dynamic>?;
                           final otherName =
                               otherData?['name'] ??
-                              (userRole == 'passenger'
+                              (widget.userRole == 'passenger'
                                   ? driverName
                                   : 'Passenger');
                           final isVerified = otherData?['isVerified'] ?? false;
+                          final profilePhoto =
+                              otherData?['profilePhotoUrl'] as String?;
 
                           return ListTile(
-                            leading: Icon(
-                              userRole == 'passenger'
-                                  ? Icons.electric_rickshaw_outlined
-                                  : Icons.person_outlined,
-                              color: AppTheme.primaryGreen,
+                            leading: CircleAvatar(
+                              radius: 24,
+                              backgroundColor: widget.userRole == 'passenger'
+                                  ? AppTheme.primaryBlue
+                                  : AppTheme.primaryGreen,
+                              backgroundImage: profilePhoto != null
+                                  ? NetworkImage(profilePhoto)
+                                  : null,
+                              child: profilePhoto == null
+                                  ? Text(
+                                      otherName.substring(0, 1).toUpperCase(),
+                                      style: const TextStyle(
+                                        fontSize: 18,
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    )
+                                  : null,
                             ),
                             title: Text(
-                              userRole == 'passenger' ? 'Driver' : 'Passenger',
+                              widget.userRole == 'passenger'
+                                  ? 'Driver'
+                                  : 'Passenger',
                               style: const TextStyle(
                                 fontSize: 12,
-                                color: Colors.grey,
+                                color: AppTheme.textMuted,
                               ),
                             ),
                             subtitle: Row(
@@ -158,11 +238,12 @@ class TripDetailScreen extends StatelessWidget {
                                     fontWeight: FontWeight.w500,
                                   ),
                                 ),
-                                if (userRole == 'passenger' && isVerified) ...[
+                                if (widget.userRole == 'passenger' &&
+                                    isVerified) ...[
                                   const SizedBox(width: 4),
                                   const Icon(
                                     Icons.verified,
-                                    color: Colors.green,
+                                    color: AppTheme.success,
                                     size: 14,
                                   ),
                                 ],
@@ -170,7 +251,7 @@ class TripDetailScreen extends StatelessWidget {
                             ),
                             trailing: const Icon(
                               Icons.chevron_right,
-                              color: Colors.grey,
+                              color: AppTheme.textMuted,
                             ),
                             onTap: otherPersonId.isNotEmpty
                                 ? () => Navigator.pushNamed(
@@ -178,7 +259,7 @@ class TripDetailScreen extends StatelessWidget {
                                     AppRoutes.userProfile,
                                     arguments: {
                                       'uid': otherPersonId,
-                                      'viewerRole': userRole,
+                                      'viewerRole': widget.userRole,
                                     },
                                   )
                                 : null,
@@ -186,6 +267,72 @@ class TripDetailScreen extends StatelessWidget {
                         },
                       ),
 
+                      // Pickup location
+                      if (data['pickupLatitude'] != null &&
+                          data['pickupLongitude'] != null) ...[
+                        const Divider(height: 1, indent: 16, endIndent: 16),
+                        _DetailTile(
+                          icon: Icons.trip_origin,
+                          title: 'Pickup Location',
+                          value: _pickupName,
+                        ),
+                      ],
+                      // Destination
+                      if (data['destinationLatitude'] != null &&
+                          data['destinationLongitude'] != null) ...[
+                        const Divider(height: 1, indent: 16, endIndent: 16),
+                        _DetailTile(
+                          icon: Icons.flag,
+                          title: 'Destination',
+                          value: _destinationName,
+                        ),
+                      ],
+                      // Distance
+                      if (data['distance'] != null) ...[
+                        const Divider(height: 1, indent: 16, endIndent: 16),
+                        _DetailTile(
+                          icon: Icons.straighten,
+                          title: 'Distance',
+                          value: '${data['distance'].toStringAsFixed(2)} km',
+                        ),
+                      ],
+                      // Fare
+                      if (data['fare'] != null) ...[
+                        const Divider(height: 1, indent: 16, endIndent: 16),
+                        _DetailTile(
+                          icon: Icons.monetization_on,
+                          title: 'Fare',
+                          value: '₱${data['fare'].toStringAsFixed(0)}',
+                          valueColor: AppTheme.primaryGreen,
+                        ),
+                      ],
+                      // Payment method
+                      if (data['paymentMethod'] != null) ...[
+                        const Divider(height: 1, indent: 16, endIndent: 16),
+                        _DetailTile(
+                          icon: Icons.payment,
+                          title: 'Payment Method',
+                          value: data['paymentMethod'] == 'gcash'
+                              ? '📱 GCash'
+                              : '💵 Cash',
+                        ),
+                      ],
+                      // Payment status
+                      if (data['paymentStatus'] != null) ...[
+                        const Divider(height: 1, indent: 16, endIndent: 16),
+                        _DetailTile(
+                          icon: data['paymentStatus'] == 'paid'
+                              ? Icons.check_circle
+                              : Icons.pending,
+                          title: 'Payment Status',
+                          value: data['paymentStatus'] == 'paid'
+                              ? '✅ Paid'
+                              : '⏳ Pending',
+                          valueColor: data['paymentStatus'] == 'paid'
+                              ? AppTheme.success
+                              : AppTheme.warning,
+                        ),
+                      ],
                       const Divider(height: 1, indent: 16, endIndent: 16),
                       _DetailTile(
                         icon: Icons.access_time_outlined,
@@ -213,13 +360,13 @@ class TripDetailScreen extends StatelessWidget {
                 const SizedBox(height: 24),
 
                 // Track button for active trips
-                if (status == 'assigned' && userRole == 'passenger')
+                if (status == 'assigned' && widget.userRole == 'passenger')
                   ElevatedButton.icon(
                     onPressed: () => Navigator.pushNamed(
                       context,
                       AppRoutes.tripTracking,
                       arguments: {
-                        'bookingId': bookingId,
+                        'bookingId': widget.bookingId,
                         'driverName': driverName,
                         'terminalName': terminalName,
                       },
@@ -233,33 +380,6 @@ class TripDetailScreen extends StatelessWidget {
         },
       ),
     );
-  }
-
-  Color _statusColor(String status) {
-    return switch (status) {
-      'assigned' => AppTheme.primaryBlue,
-      'completed' => Colors.green,
-      'cancelled' => Colors.grey,
-      _ => Colors.grey,
-    };
-  }
-
-  IconData _statusIcon(String status) {
-    return switch (status) {
-      'assigned' => Icons.electric_rickshaw,
-      'completed' => Icons.check_circle,
-      'cancelled' => Icons.cancel,
-      _ => Icons.info,
-    };
-  }
-
-  String _statusLabel(String status) {
-    return switch (status) {
-      'assigned' => 'Trip In Progress',
-      'completed' => 'Trip Completed',
-      'cancelled' => 'Trip Cancelled',
-      _ => 'Unknown Status',
-    };
   }
 }
 
@@ -282,7 +402,7 @@ class _DetailTile extends StatelessWidget {
       leading: Icon(icon, color: AppTheme.primaryGreen),
       title: Text(
         title,
-        style: const TextStyle(fontSize: 12, color: Colors.grey),
+        style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
       ),
       subtitle: Text(
         value,

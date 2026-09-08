@@ -62,7 +62,7 @@ class GeofenceService {
     _rawSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 15, // re-check after moving ~15 meters
+        distanceFilter: 3, // re-check after moving ~3 meters
       ),
     ).listen((pos) => _positionController.add(pos));
 

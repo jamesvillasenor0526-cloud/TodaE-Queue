@@ -1,74 +1,65 @@
-/// TODA's crowd-sourced reports, drawn on top of Google's traffic.
-///
-/// Google's SDK draws general congestion itself, and does it with far more
-/// data than a few dozen tricycle drivers could produce. What it cannot see
-/// is the discrete stuff people on the road know first — an accident
-/// blocking a lane, a flooded underpass, a closure for a fiesta. Those are
-/// what these markers carry.
-///
-/// Markers are a parameter of the map rather than a child layer, so this is
-/// a builder: it owns the Firestore subscription and hands the parent a
-/// ready-made marker set.
-library;
-
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-// Both packages export a LatLng. The domain models speak latlong2, so that
-// is the one left unqualified here; the map's own type is only ever reached
-// through the toMaps extension.
-import 'package:google_maps_flutter/google_maps_flutter.dart' hide LatLng;
+import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../config/theme.dart';
 import '../../../core/models/road_report.dart';
+import '../../../core/models/traffic_segment.dart';
 import '../../../core/services/report_service.dart';
-import '../../../widgets/app_google_map.dart';
+import '../../../core/services/road_geometry_service.dart';
 
-/// Marker colour per report type, matching the icon colours used in the
-/// sheets so a pin and its list entry read as the same thing.
-double _hueFor(ReportType type) => switch (type) {
-  ReportType.accident || ReportType.roadClosure => BitmapDescriptor.hueRed,
-  ReportType.trafficHeavy => BitmapDescriptor.hueRed,
-  ReportType.flooding => BitmapDescriptor.hueAzure,
-  ReportType.trafficModerate ||
-  ReportType.hazard ||
-  ReportType.breakdown => BitmapDescriptor.hueOrange,
-  ReportType.trafficClear => BitmapDescriptor.hueGreen,
-};
-
-typedef ReportMapBuilder =
-    Widget Function(
-      BuildContext context,
-      List<RoadReport> reports,
-      Set<Marker> markers,
-    );
-
-/// Subscribes to live reports near [origin] and builds their map markers.
+/// Paints live traffic and incident reports onto a [FlutterMap] as coloured
+/// road segments — strong red where conditions are bad, fading to a slight
+/// green where they are clear, the way a navigation app shows congestion.
 ///
-/// The subscription is re-centred only when [origin] moves meaningfully, so
-/// a driver's position updating every few seconds doesn't tear down and
-/// rebuild the Firestore listener.
-class ReportMarkersBuilder extends StatefulWidget {
-  const ReportMarkersBuilder({
+/// Deliberately not pins: a scatter of individual markers reads as clutter
+/// and says nothing about how bad a stretch of road actually is. Nearby
+/// reports are blended into one zone, that zone is snapped onto the real
+/// road beneath it, and the detail behind it is reached through
+/// [showConditionsSheet].
+///
+/// Road shapes come from OpenStreetMap and may be slow or unavailable, so
+/// zones with no road resolved yet are shaded as soft areas instead. That is
+/// also what the map shows on first paint, before the geometry arrives.
+///
+/// Drop it into the map's `children` after the tile layer. The subscription
+/// is owned here and re-centred only when [origin] moves meaningfully, so a
+/// parent rebuilding for unrelated reasons doesn't churn the listener.
+class TrafficOverlay extends StatefulWidget {
+  const TrafficOverlay({
     super.key,
     required this.origin,
-    required this.builder,
     this.radiusKm = 5,
+    this.onReportsChanged,
   });
 
   final LatLng origin;
   final double radiusKm;
-  final ReportMapBuilder builder;
+
+  /// Lets a parent show a count or open the conditions list without opening
+  /// a second Firestore listener of its own.
+  final ValueChanged<List<RoadReport>>? onReportsChanged;
 
   @override
-  State<ReportMarkersBuilder> createState() => _ReportMarkersBuilderState();
+  State<TrafficOverlay> createState() => _TrafficOverlayState();
 }
 
-class _ReportMarkersBuilderState extends State<ReportMarkersBuilder> {
+class _TrafficOverlayState extends State<TrafficOverlay> {
+  /// How far the origin must drift before the feed is re-centred. A driver's
+  /// position updates every few seconds; resubscribing on each tick would
+  /// tear down and rebuild the Firestore listener continuously. Well under
+  /// the default radius, so the visible set stays correct.
   static const double _recentreThresholdKm = 1;
 
   late Stream<List<RoadReport>> _stream;
   late LatLng _subscribedOrigin;
+  List<RoadReport>? _lastNotified;
+
+  /// Road shapes resolved so far. Empty until Overpass answers, which is why
+  /// the zone shading has to stand on its own as a first paint.
+  List<RoadWay> _ways = const [];
+  String? _resolvedFor;
 
   @override
   void initState() {
@@ -77,7 +68,7 @@ class _ReportMarkersBuilderState extends State<ReportMarkersBuilder> {
   }
 
   @override
-  void didUpdateWidget(covariant ReportMarkersBuilder old) {
+  void didUpdateWidget(covariant TrafficOverlay old) {
     super.didUpdateWidget(old);
     final moved =
         distanceKm(_subscribedOrigin, widget.origin) > _recentreThresholdKm;
@@ -100,70 +91,185 @@ class _ReportMarkersBuilderState extends State<ReportMarkersBuilder> {
       stream: _stream,
       builder: (context, snapshot) {
         // A failed report feed must never take the map down with it — the
-        // map is still useful without the reports.
+        // map is still useful without the overlay.
         final reports = snapshot.data ?? const <RoadReport>[];
-        final markers = <Marker>{
-          for (final r in reports)
-            Marker(
-              markerId: MarkerId('report_${r.id}'),
-              position: r.location.toMaps,
-              icon: BitmapDescriptor.defaultMarkerWithHue(_hueFor(r.type)),
-              infoWindow: InfoWindow(
-                title: r.type.label,
-                snippet: r.note?.isNotEmpty == true
-                    ? r.note
-                    : 'Reported ${r.ageLabel(DateTime.now())}',
+
+        // Notified only on a genuinely new emission. Firing on every build
+        // would loop if the parent calls setState from the callback.
+        if (!identical(reports, _lastNotified)) {
+          _lastNotified = reports;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) widget.onReportsChanged?.call(reports);
+          });
+        }
+
+        final zones = buildCongestionZones(reports, now: DateTime.now());
+        _resolveGeometry(zones);
+
+        final (:segments, :unplaced) = buildTrafficSegments(zones, _ways);
+
+        return Stack(
+          children: [
+            if (unplaced.isNotEmpty)
+              CircleLayer(
+                circles: [
+                  // A soft halo so a zone with no road under it still reads
+                  // as an area rather than a hard-edged disc.
+                  for (final z in unplaced)
+                    CircleMarker(
+                      point: z.center,
+                      radius: z.radiusMeters * 1.7,
+                      useRadiusInMeter: true,
+                      color: z.color.withValues(alpha: z.fillOpacity * 0.35),
+                      borderStrokeWidth: 0,
+                    ),
+                  for (final z in unplaced)
+                    CircleMarker(
+                      point: z.center,
+                      radius: z.radiusMeters,
+                      useRadiusInMeter: true,
+                      color: z.color.withValues(alpha: z.fillOpacity),
+                      borderColor: z.color.withValues(alpha: 0.7),
+                      borderStrokeWidth: 1.5,
+                    ),
+                ],
               ),
-              onTap: () => showConditionsSheet(context, reports, focus: r),
-            ),
-        };
-        return widget.builder(context, reports, markers);
+            if (segments.isNotEmpty) ...[
+              // A dark casing under the colour, so a red road still reads as
+              // a road against light tiles and busy backgrounds.
+              PolylineLayer(
+                polylines: [
+                  for (final s in segments)
+                    Polyline(
+                      points: s.points,
+                      strokeWidth: s.strokeWidth + 4,
+                      color: Colors.black.withValues(alpha: 0.25),
+                      strokeCap: StrokeCap.round,
+                      strokeJoin: StrokeJoin.round,
+                    ),
+                ],
+              ),
+              PolylineLayer(
+                polylines: [
+                  for (final s in segments)
+                    Polyline(
+                      points: s.points,
+                      strokeWidth: s.strokeWidth,
+                      color: s.color,
+                      strokeCap: StrokeCap.round,
+                      strokeJoin: StrokeJoin.round,
+                    ),
+                ],
+              ),
+            ],
+          ],
+        );
       },
+    );
+  }
+
+  /// Asks for the road shapes under [zones], once per distinct set.
+  ///
+  /// Fire-and-forget: the map has already painted the zone shading, and this
+  /// upgrades it to road segments when (and if) the geometry arrives.
+  void _resolveGeometry(List<CongestionZone> zones) {
+    if (zones.isEmpty) return;
+    final key = zones
+        .map(
+          (z) =>
+              '${z.center.latitude.toStringAsFixed(3)},'
+              '${z.center.longitude.toStringAsFixed(3)}',
+        )
+        .join('|');
+    if (key == _resolvedFor) return;
+    _resolvedFor = key;
+
+    RoadGeometryService.instance.waysFor(zones).then((ways) {
+      if (!mounted || ways.isEmpty) return;
+      setState(() => _ways = ways);
+    });
+  }
+}
+
+/// A compact key explaining the overlay's colours, for placing over a map.
+class TrafficLegend extends StatelessWidget {
+  const TrafficLegend({super.key});
+
+  static const _steps = <(String, double)>[
+    ('Clear', 0.0),
+    ('Light', 0.35),
+    ('Moderate', 0.6),
+    ('Heavy', 1.0),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 6,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final (label, severity) in _steps) ...[
+            Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                color: CongestionZone(
+                  center: const LatLng(0, 0),
+                  severity: severity,
+                  radiusMeters: 0,
+                  reports: const [],
+                ).color,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Text(label, style: const TextStyle(fontSize: 10)),
+            if (label != _steps.last.$1) const SizedBox(width: 8),
+          ],
+        ],
+      ),
     );
   }
 }
 
-/// The reports behind the markers, with the actions a viewer may take.
+/// The reports behind the overlay, grouped the same way the map groups them.
 ///
-/// [focus] pulls one report to the top, so tapping a pin lands on it rather
-/// than making the user find it in the list.
+/// This is where corroborating and withdrawing a report lives now that the
+/// map itself has no tappable pins.
 Future<void> showConditionsSheet(
   BuildContext context,
-  List<RoadReport> reports, {
-  RoadReport? focus,
-}) {
+  List<RoadReport> reports,
+) {
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => _ConditionsSheet(reports: reports, focus: focus),
+    builder: (_) => _ConditionsSheet(reports: reports),
   );
 }
 
 class _ConditionsSheet extends StatelessWidget {
-  const _ConditionsSheet({required this.reports, this.focus});
-
+  const _ConditionsSheet({required this.reports});
   final List<RoadReport> reports;
-  final RoadReport? focus;
 
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
-    // Worst first, then most recent — the order someone deciding whether to
-    // travel would want.
-    final ordered = reports.where((r) => r.isLive(now)).toList()
-      ..sort((a, b) {
-        if (focus != null) {
-          if (a.id == focus!.id) return -1;
-          if (b.id == focus!.id) return 1;
-        }
-        final bySeverity = b.type.severity.compareTo(a.type.severity);
-        if (bySeverity != 0) return bySeverity;
-        final x = a.createdAt, y = b.createdAt;
-        if (x == null || y == null) return 0;
-        return y.compareTo(x);
-      });
+    final zones = buildCongestionZones(reports, now: now)
+      ..sort((a, b) => b.severity.compareTo(a.severity));
 
     return DraggableScrollableSheet(
       initialChildSize: 0.6,
@@ -194,7 +300,7 @@ class _ConditionsSheet extends StatelessWidget {
                 children: [
                   const Expanded(
                     child: Text(
-                      'Reported nearby',
+                      'Road conditions nearby',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -210,19 +316,18 @@ class _ConditionsSheet extends StatelessWidget {
               ),
             ),
             Expanded(
-              child: ordered.isEmpty
+              child: zones.isEmpty
                   ? const Center(
                       child: Padding(
                         padding: EdgeInsets.all(AppSpacing.xl),
                         child: Text(
-                          'Nothing reported around here right now.\n'
-                          'Live traffic is still shown on the map.',
+                          'No conditions reported around here right now.',
                           textAlign: TextAlign.center,
                           style: TextStyle(color: AppTheme.textMuted),
                         ),
                       ),
                     )
-                  : ListView.builder(
+                  : ListView.separated(
                       controller: scrollController,
                       padding: const EdgeInsets.fromLTRB(
                         AppSpacing.lg,
@@ -230,14 +335,60 @@ class _ConditionsSheet extends StatelessWidget {
                         AppSpacing.lg,
                         AppSpacing.xl,
                       ),
-                      itemCount: ordered.length,
+                      itemCount: zones.length,
+                      separatorBuilder: (_, _) =>
+                          const SizedBox(height: AppSpacing.lg),
                       itemBuilder: (context, i) =>
-                          _ReportRow(report: ordered[i], now: now),
+                          _ZoneGroup(zone: zones[i], now: now),
                     ),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _ZoneGroup extends StatelessWidget {
+  const _ZoneGroup({required this.zone, required this.now});
+  final CongestionZone zone;
+  final DateTime now;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(
+                color: zone.color,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Text(
+              zone.label,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Text(
+              '${zone.reports.length} '
+              '${zone.reports.length == 1 ? 'report' : 'reports'}',
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppTheme.textMuted,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        for (final r in zone.reports)
+          _ReportRow(report: r, now: now),
+      ],
     );
   }
 }

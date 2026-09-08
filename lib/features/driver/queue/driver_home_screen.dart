@@ -3,16 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart' hide LatLng;
-import '../../../widgets/app_google_map.dart';
-import '../../../widgets/route_polyline.dart';
-// latlong2 also exports a Circle; the map's one is what this screen draws.
-import 'package:latlong2/latlong.dart' hide Circle;
+import 'package:flutter_map/flutter_map.dart';
+import '../../../widgets/map_tiles.dart';
+import 'package:latlong2/latlong.dart';
 import '../../../config/routes.dart';
 import '../../../config/theme.dart';
 import '../../../core/services/geofence_service.dart';
 import '../../../core/services/dispatch_service.dart';
 import '../../../core/services/notification_service.dart';
+import '../../../core/services/routing_service.dart';
 import '../../../core/utils/date_formatter.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -1580,12 +1579,12 @@ class MiniMapWidget extends StatefulWidget {
 }
 
 class _MiniMapWidgetState extends State<MiniMapWidget> {
-  GoogleMapController? _mapController;
+  final MapController _mapController = MapController();
   LatLng? _lastDriverPoint;
 
   void _recenterOnDriver() {
     if (_lastDriverPoint != null) {
-      _mapController.moveTo(_lastDriverPoint!, 15);
+      _mapController.move(_lastDriverPoint!, 15);
     }
   }
 
@@ -1653,60 +1652,72 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
             children: [
               ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: Builder(
-                  builder: (context) {
-                    final markers = <Marker>{
-                      Marker(
-                        markerId: const MarkerId('driver'),
-                        position: driverPoint.toMaps,
-                        icon: BitmapDescriptor.defaultMarkerWithHue(
-                          BitmapDescriptor.hueAzure,
-                        ),
-                        infoWindow: const InfoWindow(title: 'You'),
-                      ),
-                      Marker(
-                        markerId: const MarkerId('pickup'),
-                        position: pickupPoint.toMaps,
-                        icon: BitmapDescriptor.defaultMarkerWithHue(
-                          BitmapDescriptor.hueOrange,
-                        ),
-                        infoWindow: const InfoWindow(title: 'Pickup'),
-                      ),
-                      if (destinationPoint != null)
-                        Marker(
-                          markerId: const MarkerId('destination'),
-                          position: destinationPoint.toMaps,
-                          icon: BitmapDescriptor.defaultMarkerWithHue(
-                            BitmapDescriptor.hueRed,
-                          ),
-                          infoWindow: const InfoWindow(title: 'Destination'),
-                        ),
-                    };
-
-                    // Route to the destination once the passenger is aboard,
-                    // otherwise to the pickup.
-                    final routeTo =
+                child: FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    initialCenter:
                         widget.highlightDestination && destinationPoint != null
                         ? destinationPoint
-                        : pickupPoint;
-
-                    return RouteBuilder(
-                      from: driverPoint,
-                      to: routeTo,
-                      builder: (context, polylines) => AppGoogleMap(
-                        initialCenter:
-                            widget.highlightDestination &&
-                                destinationPoint != null
-                            ? destinationPoint
-                            : driverPoint,
-                        initialZoom: widget.highlightDestination ? 14 : 15,
-                        onMapCreated: (c) => _mapController = c,
-                        showTraffic: true,
-                        markers: markers,
-                        polylines: polylines,
+                        : driverPoint,
+                    initialZoom: widget.highlightDestination ? 14 : 15,
+                  ),
+                  children: [
+                    AppTileLayer(),
+                    // Show route based on highlight mode
+                    if (widget.highlightDestination &&
+                        destinationPoint != null &&
+                        driverLat != null) ...[
+                      _RoutingPolyline(
+                        driverPoint: driverPoint,
+                        pickupPoint: destinationPoint,
                       ),
-                    );
-                  },
+                    ] else if (driverLat != null && driverLng != null) ...[
+                      _RoutingPolyline(
+                        driverPoint: driverPoint,
+                        pickupPoint: pickupPoint,
+                      ),
+                    ],
+                    TrafficOverlay(origin: driverPoint, radiusKm: 3),
+                    MarkerLayer(
+                      markers: [
+                        Marker(
+                          point: driverPoint,
+                          width: 40,
+                          height: 40,
+                          child: const Icon(
+                            Icons.electric_rickshaw,
+                            color: AppTheme.primaryBlue,
+                            size: 30,
+                          ),
+                        ),
+                        Marker(
+                          point: pickupPoint,
+                          width: widget.highlightDestination ? 30 : 45,
+                          height: widget.highlightDestination ? 30 : 45,
+                          child: Icon(
+                            Icons.flag,
+                            color: widget.highlightDestination
+                                ? Colors.grey.withValues(alpha: 0.4)
+                                : AppTheme.warning,
+                            size: widget.highlightDestination ? 20 : 35,
+                          ),
+                        ),
+                        if (destinationPoint != null)
+                          Marker(
+                            point: destinationPoint,
+                            width: widget.highlightDestination ? 45 : 30,
+                            height: widget.highlightDestination ? 45 : 30,
+                            child: Icon(
+                              Icons.location_on,
+                              color: widget.highlightDestination
+                                  ? AppTheme.errorRed
+                                  : Colors.grey.withValues(alpha: 0.4),
+                              size: widget.highlightDestination ? 35 : 20,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
               // Recenter button
@@ -1735,6 +1746,59 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
 
 // ─── Routing Polyline ─────────────────────────────────────────────────────────
 
+class _RoutingPolyline extends StatefulWidget {
+  final LatLng driverPoint;
+  final LatLng pickupPoint;
+  const _RoutingPolyline({
+    required this.driverPoint,
+    required this.pickupPoint,
+  });
+
+  @override
+  State<_RoutingPolyline> createState() => _RoutingPolylineState();
+}
+
+class _RoutingPolylineState extends State<_RoutingPolyline> {
+  List<LatLng>? _routePoints;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchRoute();
+  }
+
+  @override
+  void didUpdateWidget(covariant _RoutingPolyline oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.driverPoint != widget.driverPoint ||
+        oldWidget.pickupPoint != widget.pickupPoint) {
+      _fetchRoute();
+    }
+  }
+
+  Future<void> _fetchRoute() async {
+    try {
+      final points = await RoutingService.instance.getRoute(
+        widget.driverPoint,
+        widget.pickupPoint,
+      );
+      if (mounted) setState(() => _routePoints = points);
+    } catch (e) {
+      debugPrint('OSRM routing error: $e');
+      if (mounted) setState(() => _routePoints = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final points = _routePoints ?? [widget.driverPoint, widget.pickupPoint];
+    return PolylineLayer(
+      polylines: [
+        Polyline(points: points, color: AppTheme.primaryBlue, strokeWidth: 3),
+      ],
+    );
+  }
+}
 
 // ─── Driver Map Tab ───────────────────────────────────────────────────────────
 
@@ -1750,9 +1814,10 @@ class _DriverMapTabState extends State<_DriverMapTab> {
   static const LatLng _baliwagCenter = LatLng(14.9540, 120.9010);
 
   final _geofence = GeofenceService.instance;
-  GoogleMapController? _mapController;
+  final MapController _mapController = MapController();
   StreamSubscription<Position>? _positionSub;
   LatLng? _myPosition;
+  double _zoom = 16;
   bool _locationUnavailable = false;
   String? _assignedTerminalName;
   List<RoadReport> _nearbyReports = const [];
@@ -1789,7 +1854,7 @@ class _DriverMapTabState extends State<_DriverMapTab> {
     final point = _myPosition;
     if (point == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _mapController.moveTo(point, 16);
+      _mapController.move(point, _zoom);
     });
   }
 
@@ -1852,8 +1917,8 @@ class _DriverMapTabState extends State<_DriverMapTab> {
       stream: FirebaseFirestore.instance.collection('terminals').snapshots(),
       builder: (context, snapshot) {
         final terminals = snapshot.data?.docs ?? [];
-        final markers = <Marker>{};
-        final circles = <Circle>{};
+        final markers = <Marker>[];
+        final circles = <CircleMarker>[];
 
         for (final doc in terminals) {
           final data = doc.data() as Map<String, dynamic>;
@@ -1868,39 +1933,24 @@ class _DriverMapTabState extends State<_DriverMapTab> {
               data['name'] == _assignedTerminalName;
           if (isAssigned) {
             circles.add(
-              Circle(
-                circleId: CircleId('geofence_${doc.id}'),
-                center: point.toMaps,
+              CircleMarker(
+                point: point,
                 radius: 5,
-                fillColor: AppTheme.primaryGreen.withValues(alpha: 0.3),
-                strokeColor: AppTheme.primaryGreen,
-                strokeWidth: 2,
+                useRadiusInMeter: true,
+                color: AppTheme.primaryGreen.withValues(alpha: 0.3),
+                borderColor: AppTheme.primaryGreen,
+                borderStrokeWidth: 2,
               ),
             );
           }
 
-          final isTerminalAssigned =
-              _assignedTerminalName == null ||
-              data['name'] == _assignedTerminalName;
-
           markers.add(
             Marker(
-              markerId: MarkerId('terminal_${doc.id}'),
-              position: point.toMaps,
-              icon: BitmapDescriptor.defaultMarkerWithHue(
-                // A terminal the driver isn't assigned to is dimmed, the way
-                // the grey label used to say it.
-                isTerminalAssigned
-                    ? BitmapDescriptor.hueGreen
-                    : BitmapDescriptor.hueViolet,
-              ),
-              infoWindow: InfoWindow(
-                title: data['name'] ?? 'Terminal',
-                snippet: isTerminalAssigned
-                    ? 'Your terminal · tap for details'
-                    : 'Not your terminal',
-              ),
-              onTap: () {
+              point: point,
+              width: 140,
+              height: 60,
+              child: GestureDetector(
+                onTap: () {
                   showModalBottomSheet(
                     context: context,
                     builder: (_) => Padding(
@@ -1950,46 +2000,98 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                     ),
                   );
                 },
+                child: Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color:
+                            _assignedTerminalName == null ||
+                                data['name'] == _assignedTerminalName
+                            ? AppTheme.primaryGreen
+                            : AppTheme.textMuted,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        data['name'] ?? 'Terminal',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Icon(
+                      Icons.location_on,
+                      color:
+                          _assignedTerminalName == null ||
+                              data['name'] == _assignedTerminalName
+                          ? AppTheme.primaryGreen
+                          : AppTheme.textMuted,
+                      size: 24,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+
+        if (_myPosition != null) {
+          markers.add(
+            Marker(
+              point: _myPosition!,
+              width: 40,
+              height: 40,
+              child: const _SelfLocationDot(),
             ),
           );
         }
 
         return Stack(
           children: [
-            // Drivers are both the main source of these reports and their
-            // main audience, so they sit on top of Google's traffic here.
-            ReportMarkersBuilder(
-              origin: _myPosition ?? _baliwagCenter,
-              builder: (context, reports, reportMarkers) {
-                if (mounted && reports.length != _nearbyReports.length) {
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted) setState(() => _nearbyReports = reports);
-                  });
-                }
-                return AppGoogleMap(
-                  initialCenter: _baliwagCenter,
-                  initialZoom: 15,
-                  onMapCreated: (c) => _mapController = c,
-                  showTraffic: true,
-                  // The SDK draws the driver's own position, replacing the
-                  // hand-rolled location dot.
-                  showMyLocation: true,
-                  circles: circles,
-                  markers: {...markers, ...reportMarkers},
-                );
-              },
-            ),
-            if (_nearbyReports.isNotEmpty)
-              Positioned(
-                top: 12,
-                right: 12,
-                child: ActionChip(
-                  avatar: const Icon(Icons.report_problem_outlined, size: 16),
-                  label: Text('${_nearbyReports.length} reported'),
-                  onPressed: () =>
-                      showConditionsSheet(context, _nearbyReports),
-                ),
+            FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: _baliwagCenter,
+                initialZoom: 15,
+                onMapEvent: (event) {
+                  _zoom = event.camera.zoom;
+                },
               ),
+              children: [
+                AppTileLayer(),
+                CircleLayer(circles: circles),
+                // Drivers are the main source of these reports and the main
+                // audience for them. Shaded under the markers so terminals
+                // and vehicles stay readable on top of the traffic colour.
+                TrafficOverlay(
+                  origin: _myPosition ?? _baliwagCenter,
+                  onReportsChanged: (reports) {
+                    if (!mounted || reports.length == _nearbyReports.length) {
+                      return;
+                    }
+                    setState(() => _nearbyReports = reports);
+                  },
+                ),
+                MarkerLayer(markers: markers),
+                const AppMapAttribution(),
+              ],
+            ),
+            Positioned(
+              top: 12,
+              right: 12,
+              child: GestureDetector(
+                onTap: _nearbyReports.isEmpty
+                    ? null
+                    : () => showConditionsSheet(context, _nearbyReports),
+                child: const TrafficLegend(),
+              ),
+            ),
             if (_locationUnavailable)
               Positioned(
                 top: 12,
@@ -2045,7 +2147,12 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                     heroTag: 'zoom_in',
                     backgroundColor: Colors.white,
                     tooltip: 'Zoom in',
-                    onPressed: () => _mapController.zoomBy(1),
+                    onPressed: () {
+                      _mapController.move(
+                        _mapController.camera.center,
+                        _zoom + 1,
+                      );
+                    },
                     child: const Icon(Icons.add, color: Colors.black87),
                   ),
                   const SizedBox(height: 8),
@@ -2053,7 +2160,12 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                     heroTag: 'zoom_out',
                     backgroundColor: Colors.white,
                     tooltip: 'Zoom out',
-                    onPressed: () => _mapController.zoomBy(-1),
+                    onPressed: () {
+                      _mapController.move(
+                        _mapController.camera.center,
+                        _zoom - 1,
+                      );
+                    },
                     child: const Icon(Icons.remove, color: Colors.black87),
                   ),
                 ],
@@ -2062,6 +2174,34 @@ class _DriverMapTabState extends State<_DriverMapTab> {
           ],
         );
       },
+    );
+  }
+}
+
+// ─── Self Location Dot ────────────────────────────────────────────────────────
+
+class _SelfLocationDot extends StatelessWidget {
+  const _SelfLocationDot();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.blue.withValues(alpha: 0.25),
+      ),
+      child: Center(
+        child: Container(
+          width: 16,
+          height: 16,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: AppTheme.info,
+            border: Border.all(color: Colors.white, width: 2),
+            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+          ),
+        ),
+      ),
     );
   }
 }

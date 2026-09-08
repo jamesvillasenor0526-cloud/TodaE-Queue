@@ -2,8 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart' hide LatLng;
-import '../../../widgets/app_google_map.dart';
+import 'package:flutter_map/flutter_map.dart';
+import '../../../widgets/map_tiles.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../../config/theme.dart';
@@ -37,7 +37,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
 
   StreamSubscription<Position>? _positionStream;
   LatLng? _passengerPosition;
-  GoogleMapController? _mapController;
+  final MapController _mapController = MapController();
 
   @override
   void initState() {
@@ -335,7 +335,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
           // Add this after driverPosition:
           if (driverPosition != null) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              _mapController.moveTo(driverPosition, 16);
+              _mapController.move(driverPosition, 16);
             });
           }
 
@@ -363,55 +363,112 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
             _showRatingDialog(context, driverId);
           }
 
-          // Google draws the vehicle-position dot styling itself; these are
-          // the trip's own points of interest.
-          final markers = <Marker>{
-            if (driverPosition != null)
+          final markers = <Marker>[];
+          if (driverPosition != null) {
+            markers.add(
               Marker(
-                markerId: const MarkerId('driver'),
-                position: driverPosition.toMaps,
-                icon: BitmapDescriptor.defaultMarkerWithHue(
-                  BitmapDescriptor.hueAzure,
+                point: driverPosition,
+                width: 40,
+                height: 40,
+                child: GestureDetector(
+                  onTap: () {
+                    _mapController.move(driverPosition, 16);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('📍 Driver location'),
+                        duration: Duration(seconds: 1),
+                      ),
+                    );
+                  },
+                  child: const Icon(
+                    Icons.electric_rickshaw,
+                    color: AppTheme.primaryBlue,
+                    size: 36,
+                  ),
                 ),
-                infoWindow: const InfoWindow(title: 'Your driver'),
               ),
-            if (_passengerPosition != null)
-              Marker(
-                markerId: const MarkerId('passenger'),
-                position: _passengerPosition!.toMaps,
-                icon: BitmapDescriptor.defaultMarkerWithHue(
-                  BitmapDescriptor.hueGreen,
-                ),
-                infoWindow: const InfoWindow(title: 'You'),
-              ),
-            if (data['pickupLatitude'] != null &&
-                data['pickupLongitude'] != null)
-              Marker(
-                markerId: const MarkerId('pickup'),
-                position: LatLng(
-                  data['pickupLatitude'] as double,
-                  data['pickupLongitude'] as double,
-                ).toMaps,
-                icon: BitmapDescriptor.defaultMarkerWithHue(
-                  BitmapDescriptor.hueOrange,
-                ),
-                infoWindow: const InfoWindow(title: 'Pickup'),
-              ),
-            if (data['destinationLatitude'] != null &&
-                data['destinationLongitude'] != null)
-              Marker(
-                markerId: const MarkerId('destination'),
-                position: LatLng(
-                  data['destinationLatitude'] as double,
-                  data['destinationLongitude'] as double,
-                ).toMaps,
-                icon: BitmapDescriptor.defaultMarkerWithHue(
-                  BitmapDescriptor.hueRed,
-                ),
-                infoWindow: const InfoWindow(title: 'Destination'),
-              ),
-          };
+            );
+          }
 
+          if (_passengerPosition != null) {
+            markers.add(
+              Marker(
+                point: _passengerPosition!,
+                width: 40,
+                height: 40,
+                child: GestureDetector(
+                  onTap: () {
+                    _mapController.move(_passengerPosition!, 16);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('📍 Your location'),
+                        duration: Duration(seconds: 1),
+                      ),
+                    );
+                  },
+                  child: const Icon(
+                    Icons.person_pin_circle,
+                    color: AppTheme.primaryGreen,
+                    size: 36,
+                  ),
+                ),
+              ),
+            );
+          }
+
+          final pLat = data['pickupLatitude'] as double?;
+          final pLng = data['pickupLongitude'] as double?;
+          if (pLat != null && pLng != null) {
+            final pickupPoint = LatLng(pLat, pLng);
+            markers.add(
+              Marker(
+                point: pickupPoint,
+                width: 40,
+                height: 40,
+                child: GestureDetector(
+                  onTap: () {
+                    _mapController.move(pickupPoint, 16);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('📍 Pickup location'),
+                        duration: Duration(seconds: 1),
+                      ),
+                    );
+                  },
+                  child: const Icon(Icons.flag, color: AppTheme.warning, size: 28),
+                ),
+              ),
+            );
+          }
+
+          final dLat = data['destinationLatitude'] as double?;
+          final dLng = data['destinationLongitude'] as double?;
+          if (dLat != null && dLng != null) {
+            final destinationPoint = LatLng(dLat, dLng);
+            markers.add(
+              Marker(
+                point: destinationPoint,
+                width: 40,
+                height: 40,
+                child: GestureDetector(
+                  onTap: () {
+                    _mapController.move(destinationPoint, 16);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('📍 Destination'),
+                        duration: Duration(seconds: 1),
+                      ),
+                    );
+                  },
+                  child: const Icon(
+                    Icons.location_on,
+                    color: AppTheme.errorRed,
+                    size: 28,
+                  ),
+                ),
+              ),
+            );
+          }
           final mapCenter = _calculateCenter(
             driverPosition,
             _passengerPosition,
@@ -533,19 +590,20 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
               Expanded(
                 child: Stack(
                   children: [
-                    // Live traffic matters most while actually on the road,
-                    // so it and the TODA reports both follow the trip.
-                    ReportMarkersBuilder(
-                      origin: mapCenter,
-                      radiusKm: 3,
-                      builder: (context, reports, reportMarkers) =>
-                          AppGoogleMap(
-                            initialCenter: mapCenter,
-                            initialZoom: 16,
-                            onMapCreated: (c) => _mapController = c,
-                            showTraffic: true,
-                            markers: {...markers, ...reportMarkers},
-                          ),
+                    FlutterMap(
+                      mapController: _mapController,
+                      options: MapOptions(
+                        initialCenter: mapCenter,
+                        initialZoom: 16,
+                      ),
+                      children: [
+                        AppTileLayer(),
+                        MarkerLayer(markers: markers),
+                        // Traffic and incidents matter most while you are
+                        // actually on the road, so the overlay follows the
+                        // trip too.
+                        TrafficOverlay(origin: mapCenter, radiusKm: 3),
+                      ],
                     ),
                     // Recenter button
                     Positioned(
@@ -555,7 +613,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                         backgroundColor: Colors.white,
                         tooltip: 'Recenter',
                         onPressed: () {
-                          _mapController.moveTo(mapCenter, 16);
+                          _mapController.move(mapCenter, 16);
                         },
                         child: const Icon(
                           Icons.my_location,
@@ -612,7 +670,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                     GestureDetector(
                       onTap: () {
                         if (driverPosition != null) {
-                          _mapController.moveTo(driverPosition, 16);
+                          _mapController.move(driverPosition, 16);
                         }
                       },
                       child: _LegendItem(
@@ -624,7 +682,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                     GestureDetector(
                       onTap: () {
                         if (_passengerPosition != null) {
-                          _mapController.moveTo(_passengerPosition!, 16);
+                          _mapController.move(_passengerPosition!, 16);
                         }
                       },
                       child: _LegendItem(
@@ -633,17 +691,10 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                         label: 'You',
                       ),
                     ),
-                    if (data['pickupLatitude'] != null &&
-                        data['pickupLongitude'] != null)
+                    if (pLat != null && pLng != null)
                       GestureDetector(
                         onTap: () {
-                          _mapController.moveTo(
-                            LatLng(
-                              data['pickupLatitude'] as double,
-                              data['pickupLongitude'] as double,
-                            ),
-                            16,
-                          );
+                          _mapController.move(LatLng(pLat, pLng), 16);
                         },
                         child: _LegendItem(
                           icon: Icons.flag,
@@ -651,17 +702,10 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                           label: 'Pickup',
                         ),
                       ),
-                    if (data['destinationLatitude'] != null &&
-                        data['destinationLongitude'] != null)
+                    if (dLat != null && dLng != null)
                       GestureDetector(
                         onTap: () {
-                          _mapController.moveTo(
-                            LatLng(
-                              data['destinationLatitude'] as double,
-                              data['destinationLongitude'] as double,
-                            ),
-                            16,
-                          );
+                          _mapController.move(LatLng(dLat, dLng), 16);
                         },
                         child: _LegendItem(
                           icon: Icons.location_on,

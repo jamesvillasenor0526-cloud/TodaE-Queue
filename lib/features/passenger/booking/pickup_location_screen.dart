@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart' hide LatLng;
-import '../../../widgets/app_google_map.dart';
+import 'package:flutter_map/flutter_map.dart';
+import '../../../widgets/map_tiles.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../../config/theme.dart';
@@ -22,7 +22,7 @@ class PickupLocationScreen extends StatefulWidget {
 class _PickupLocationScreenState extends State<PickupLocationScreen> {
   static const LatLng _baliwagCenter = LatLng(14.9540, 120.9010);
 
-  GoogleMapController? _mapController;
+  final MapController _mapController = MapController();
 
   LatLng? _selectedLocation;
   LatLng? _currentLocation;
@@ -49,7 +49,7 @@ class _PickupLocationScreenState extends State<PickupLocationScreen> {
           _isLoadingLocation = false;
         });
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          _mapController.moveTo(_currentLocation!, 16);
+          _mapController.move(_currentLocation!, 16);
         });
       }
     } catch (e) {
@@ -60,13 +60,13 @@ class _PickupLocationScreenState extends State<PickupLocationScreen> {
           _selectedLocation = _baliwagCenter;
         });
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          _mapController.moveTo(_baliwagCenter, 15);
+          _mapController.move(_baliwagCenter, 15);
         });
       }
     }
   }
 
-  void _onMapTapped(LatLng point) {
+  void _onMapTapped(TapPosition tapPosition, LatLng point) {
     setState(() {
       _selectedLocation = point;
     });
@@ -96,25 +96,60 @@ class _PickupLocationScreenState extends State<PickupLocationScreen> {
           : Stack(
               children: [
                 // Map
-                AppGoogleMap(
-                  initialCenter: _currentLocation ?? _baliwagCenter,
-                  initialZoom: 16,
-                  onTap: _onMapTapped,
-                  onMapCreated: (c) => _mapController = c,
-                  // The device dot is drawn by the SDK, so the app no longer
-                  // maintains a marker for it.
-                  showMyLocation: true,
-                  markers: {
+                FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    initialCenter: _currentLocation ?? _baliwagCenter,
+                    initialZoom: 16,
+                    onTap: _onMapTapped,
+                  ),
+                  children: [
+                    AppTileLayer(),
+                    // Selected pickup pin (red)
                     if (_selectedLocation != null)
-                      Marker(
-                        markerId: const MarkerId('pickup'),
-                        position: _selectedLocation!.toMaps,
-                        icon: BitmapDescriptor.defaultMarkerWithHue(
-                          BitmapDescriptor.hueRed,
-                        ),
-                        infoWindow: const InfoWindow(title: 'Pickup point'),
+                      MarkerLayer(
+                        markers: [
+                          Marker(
+                            point: _selectedLocation!,
+                            width: 40,
+                            height: 40,
+                            child: const Icon(
+                              Icons.location_on,
+                              color: AppTheme.errorRed,
+                              size: 36,
+                            ),
+                          ),
+                        ],
                       ),
-                  },
+                    // Current location dot (blue)
+                    if (_currentLocation != null)
+                      MarkerLayer(
+                        markers: [
+                          Marker(
+                            point: _currentLocation!,
+                            width: 24,
+                            height: 24,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.blue.withValues(alpha: 0.3),
+                                border: Border.all(
+                                  color: AppTheme.info,
+                                  width: 2,
+                                ),
+                              ),
+                              child: const Center(
+                                child: Icon(
+                                  Icons.my_location,
+                                  color: AppTheme.info,
+                                  size: 14,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                  ],
                 ),
 
                 // Center crosshair
@@ -179,7 +214,7 @@ class _PickupLocationScreenState extends State<PickupLocationScreen> {
                     backgroundColor: Colors.white,
                     onPressed: () {
                       if (_currentLocation != null) {
-                        _mapController.moveTo(_currentLocation!, 16);
+                        _mapController.move(_currentLocation!, 16);
                         setState(() {
                           _selectedLocation = _currentLocation;
                         });

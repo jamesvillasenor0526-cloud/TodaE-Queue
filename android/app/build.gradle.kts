@@ -1,12 +1,3 @@
-import java.util.Properties
-
-// local.properties is gitignored, which is what keeps the Maps key out of
-// the repository.
-val localProperties = Properties().apply {
-    val file = rootProject.file("local.properties")
-    if (file.exists()) file.inputStream().use { load(it) }
-}
-
 plugins {
     id("com.android.application")
     // START: FlutterFire Configuration
@@ -36,13 +27,6 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-
-        // Google Maps key, kept out of source control. Set MAPS_API_KEY in
-        // android/local.properties (gitignored). The build deliberately
-        // still succeeds without it — the map just renders grey — so a
-        // fresh clone can build before the key is set up.
-        manifestPlaceholders["MAPS_API_KEY"] =
-            localProperties.getProperty("MAPS_API_KEY") ?: ""
     }
 
     buildTypes {

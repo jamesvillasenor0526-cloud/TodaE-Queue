@@ -28,10 +28,15 @@ service cloud.firestore {
 
     // Admins are identified by the role on their own user document.
     // Costs one extra read, so callers put the cheaper self-check first.
+    //
+    // The exists() guard matters: without it, a signed-in user who has no
+    // users/{uid} document makes this throw rather than return false, which
+    // shows up as an evaluation error instead of a clean deny.
     function isAdmin() {
-      return signedIn() &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid))
-          .data.role in ['toda_admin', 'super_admin'];
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid))
+             .data.get('role', '') in ['toda_admin', 'super_admin'];
     }
 
     // Approval and role must survive a self-update untouched.
@@ -100,6 +105,40 @@ service cloud.firestore {
     match /receipts/{receiptId} {
       allow read: if signedIn();
       allow create, update: if signedIn();
+      allow delete: if false;
+    }
+
+    // Crowd-sourced traffic and incident reports.
+    //
+    // This collection is new, so unlike queueEntries/bookings there is no
+    // legacy client to accommodate and the rules can be written tight from
+    // the start: a report is anonymous to nobody, cannot be filed on someone
+    // else's behalf, and cannot be rewritten into a different claim after
+    // the fact.
+    match /reports/{reportId} {
+      allow read: if signedIn();
+
+      allow create: if signedIn()
+        && request.resource.data.reportedBy == request.auth.uid
+        && request.resource.data.confirmations == 0
+        && request.resource.data.cleared == false
+        && request.resource.data.type is string
+        && request.resource.data.latitude is number
+        && request.resource.data.longitude is number;
+
+      // Anyone signed in may corroborate a report, but what it says, where
+      // it is and who filed it are fixed once written. Only the reporter or
+      // an admin may take it down.
+      allow update: if signedIn()
+        && request.resource.data.type == resource.data.type
+        && request.resource.data.reportedBy == resource.data.reportedBy
+        && request.resource.data.latitude == resource.data.latitude
+        && request.resource.data.longitude == resource.data.longitude
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (request.resource.data.cleared == resource.data.cleared
+            || resource.data.reportedBy == request.auth.uid
+            || isAdmin());
+
       allow delete: if false;
     }
 

@@ -23,6 +23,8 @@ import '../../../widgets/state_views.dart';
 import 'widgets/trip_action_panel.dart';
 import '../../../core/models/trip_state.dart';
 import '../../../core/services/trip_service.dart';
+import '../../shared/reports/report_map_layer.dart';
+import '../../shared/reports/report_sheet.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   const DriverHomeScreen({super.key});
@@ -1677,6 +1679,7 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
                         pickupPoint: pickupPoint,
                       ),
                     ],
+                    ReportMarkerLayer(origin: driverPoint, radiusKm: 3),
                     MarkerLayer(
                       markers: [
                         Marker(
@@ -2068,6 +2071,9 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                 ),
                 CircleLayer(circles: circles),
                 MarkerLayer(markers: markers),
+                // Drivers are the main source of these reports and the main
+                // audience for them, so the overlay lives on their map too.
+                ReportMarkerLayer(origin: _myPosition ?? _baliwagCenter),
               ],
             ),
             if (_locationUnavailable)
@@ -2090,6 +2096,18 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                   ),
                 ),
               ),
+            Positioned(
+              bottom: 16,
+              left: 16,
+              child: FloatingActionButton.extended(
+                heroTag: 'driverReport',
+                backgroundColor: AppTheme.warning,
+                foregroundColor: Colors.white,
+                onPressed: () => showReportSheet(context),
+                icon: const Icon(Icons.add_alert),
+                label: const Text('Report'),
+              ),
+            ),
             Positioned(
               bottom: 16,
               right: 16,

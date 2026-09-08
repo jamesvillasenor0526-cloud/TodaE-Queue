@@ -11,6 +11,7 @@ import '../booking/payment_screen.dart';
 import 'widgets/trip_status_card.dart';
 import '../../../core/models/trip_state.dart';
 import '../../../core/services/trip_service.dart';
+import '../../shared/reports/report_map_layer.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class TripTrackingScreen extends StatefulWidget {
@@ -601,6 +602,10 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                           userAgentPackageName: 'com.example.toda_equeue_plus',
                         ),
                         MarkerLayer(markers: markers),
+                        // Traffic and incidents matter most while you are
+                        // actually on the road, so the overlay follows the
+                        // trip too.
+                        ReportMarkerLayer(origin: mapCenter, radiusKm: 3),
                       ],
                     ),
                     // Recenter button

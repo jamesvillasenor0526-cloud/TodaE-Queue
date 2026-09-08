@@ -5,6 +5,8 @@ import 'package:latlong2/latlong.dart';
 import '../../../config/theme.dart';
 import '../../../config/routes.dart';
 import '../../../core/services/dispatch_service.dart';
+import '../../shared/reports/report_map_layer.dart';
+import '../../shared/reports/report_sheet.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 
@@ -27,6 +29,7 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
 
   LatLng? _userLocation;
   Map<String, double> _terminalDistances = {};
+  int _liveReportCount = 0;
 
   LatLng? _parseBoundaryPoint(dynamic raw) {
     try {
@@ -353,6 +356,17 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
                     userAgentPackageName: 'com.example.toda_equeue_plus',
                   ),
                   MarkerLayer(markers: markers),
+                  // Crowd-sourced traffic and incidents, centred on the
+                  // user once their position is known.
+                  ReportMarkerLayer(
+                    origin: _userLocation ?? _baliwagCenter,
+                    onReportsChanged: (reports) {
+                      if (!mounted || reports.length == _liveReportCount) {
+                        return;
+                      }
+                      setState(() => _liveReportCount = reports.length);
+                    },
+                  ),
                 ],
               );
             },
@@ -456,13 +470,77 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
           Positioned(
             top: 70,
             right: 12,
-            child: FloatingActionButton.small(
-              backgroundColor: AppTheme.info,
-              tooltip: 'Find nearest terminal',
-              onPressed: _findNearestTerminal,
-              child: const Icon(Icons.near_me, color: Colors.white, size: 18),
+            child: Column(
+              children: [
+                FloatingActionButton.small(
+                  heroTag: 'nearestTerminal',
+                  backgroundColor: AppTheme.info,
+                  tooltip: 'Find nearest terminal',
+                  onPressed: _findNearestTerminal,
+                  child: const Icon(
+                    Icons.near_me,
+                    color: Colors.white,
+                    size: 18,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                FloatingActionButton.small(
+                  heroTag: 'reportCondition',
+                  backgroundColor: AppTheme.warning,
+                  tooltip: 'Report traffic or an incident',
+                  onPressed: () => showReportSheet(context),
+                  child: const Icon(
+                    Icons.add_alert,
+                    color: Colors.white,
+                    size: 18,
+                  ),
+                ),
+              ],
             ),
           ),
+
+          // Tells the user the overlay is live even when no pin is on screen.
+          if (_liveReportCount > 0)
+            Positioned(
+              top: 70,
+              left: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(AppRadius.pill),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Colors.black26,
+                      blurRadius: 6,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.traffic,
+                      size: 14,
+                      color: AppTheme.warning,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '$_liveReportCount nearby '
+                      '${_liveReportCount == 1 ? 'report' : 'reports'}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
 
           // Searched location indicator
           if (_searchedLocationName != null)

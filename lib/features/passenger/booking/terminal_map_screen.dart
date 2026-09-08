@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter_map/flutter_map.dart';
-import '../../../widgets/map_tiles.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' hide LatLng;
+import '../../../widgets/app_google_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../config/theme.dart';
 import '../../../config/routes.dart';
@@ -22,7 +22,7 @@ class TerminalMapScreen extends StatefulWidget {
 class _TerminalMapScreenState extends State<TerminalMapScreen> {
   static const LatLng _baliwagCenter = LatLng(14.9540, 120.9010);
 
-  final MapController _mapController = MapController();
+  GoogleMapController? _mapController;
   final TextEditingController _searchController = TextEditingController();
   List<Map<String, dynamic>> _searchResults = [];
   LatLng? _searchedLocation;
@@ -115,7 +115,7 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
       _searchController.clear();
     });
 
-    _mapController.move(point, 16);
+    _mapController.moveTo(point, 16);
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -132,7 +132,7 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
       _searchedLocationName = null;
       _searchController.clear();
     });
-    _mapController.move(_baliwagCenter, 15);
+    _mapController.moveTo(_baliwagCenter, 15);
   }
 
   Future<void> _findNearestTerminal() async {
@@ -190,7 +190,7 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
 
       // Move map to nearest terminal
       if (nearestPoint != null && nearestName != null) {
-        _mapController.move(nearestPoint, 16);
+        _mapController.moveTo(nearestPoint, 16);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -240,11 +240,18 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
                     if (point == null) return null;
 
                     return Marker(
-                      point: point,
-                      width: 120,
-                      height: 60,
-                      child: GestureDetector(
-                        onTap: () async {
+                      markerId: MarkerId('terminal_${doc.id}'),
+                      position: point.toMaps,
+                      icon: BitmapDescriptor.defaultMarkerWithHue(
+                        BitmapDescriptor.hueGreen,
+                      ),
+                      // The name used to be drawn as a widget above the pin;
+                      // Google draws it in the info window instead.
+                      infoWindow: InfoWindow(
+                        title: data['name'] ?? 'Terminal',
+                        snippet: 'Tap to book a ride',
+                      ),
+                      onTap: () async {
                           final result =
                               await showModalBottomSheet<DispatchResult>(
                                 context: context,
@@ -295,79 +302,44 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
                             );
                           }
                         },
-                        child: Column(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: AppTheme.primaryGreen,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                data['name'] ?? 'Terminal',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            const Icon(
-                              Icons.location_on,
-                              color: AppTheme.primaryGreen,
-                              size: 24,
-                            ),
-                          ],
-                        ),
-                      ),
                     );
                   })
                   .whereType<Marker>()
-                  .toList();
+                  .toSet();
 
               // Add searched location marker
               if (_searchedLocation != null) {
                 markers.add(
                   Marker(
-                    point: _searchedLocation!,
-                    width: 40,
-                    height: 40,
-                    child: const Icon(
-                      Icons.search,
-                      color: AppTheme.info,
-                      size: 32,
+                    markerId: const MarkerId('searched'),
+                    position: _searchedLocation!.toMaps,
+                    icon: BitmapDescriptor.defaultMarkerWithHue(
+                      BitmapDescriptor.hueAzure,
+                    ),
+                    infoWindow: InfoWindow(
+                      title: _searchedLocationName ?? 'Search result',
                     ),
                   ),
                 );
               }
 
-              return FlutterMap(
-                mapController: _mapController,
-                options: const MapOptions(
-                  initialCenter: _baliwagCenter,
-                  initialZoom: 15,
-                ),
-                children: [
-                  AppTileLayer(),
-                  // Shaded beneath the terminal pins so the traffic colour
-                  // never hides the thing the user came here to tap.
-                  TrafficOverlay(
-                    origin: _userLocation ?? _baliwagCenter,
-                    onReportsChanged: (reports) {
-                      if (!mounted ||
-                          reports.length == _nearbyReports.length) {
-                        return;
-                      }
-                      setState(() => _nearbyReports = reports);
-                    },
-                  ),
-                  MarkerLayer(markers: markers),
-                  const AppMapAttribution(),
-                ],
+              // TODA's own reports sit on top of Google's traffic layer.
+              return ReportMarkersBuilder(
+                origin: _userLocation ?? _baliwagCenter,
+                builder: (context, reports, reportMarkers) {
+                  if (mounted && reports.length != _nearbyReports.length) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) setState(() => _nearbyReports = reports);
+                    });
+                  }
+                  return AppGoogleMap(
+                    initialCenter: _baliwagCenter,
+                    initialZoom: 15,
+                    onMapCreated: (c) => _mapController = c,
+                    showTraffic: true,
+                    markers: {...markers, ...reportMarkers},
+                  );
+                },
               );
             },
           ),
@@ -553,8 +525,6 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
               ),
             ),
 
-          // Bottom-left is taken by the OpenStreetMap attribution.
-          const Positioned(bottom: 16, right: 12, child: TrafficLegend()),
 
           // Searched location indicator
           if (_searchedLocationName != null)

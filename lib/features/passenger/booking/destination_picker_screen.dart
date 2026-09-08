@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import '../../../widgets/map_tiles.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' hide LatLng;
+import '../../../widgets/app_google_map.dart';
+import '../../../widgets/route_polyline.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../../config/theme.dart';
 import '../../../../core/services/fare_service.dart';
@@ -34,7 +35,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
   double? _terminalToPickupDistance; // ← ADD
   double? _pickupToDestinationDistance; // ← ADD
 
-  void _onMapTapped(TapPosition tapPosition, LatLng point) {
+  void _onMapTapped(LatLng point) {
     setState(() {
       _destination = point;
       _routeDistance = null;
@@ -160,46 +161,43 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
       appBar: AppBar(title: const Text('Select Destination')),
       body: Stack(
         children: [
-          FlutterMap(
-            options: MapOptions(
-              initialCenter: pickup,
-              initialZoom: 15,
-              onTap: _onMapTapped,
-            ),
-            children: [
-              AppTileLayer(),
-              MarkerLayer(
-                markers: [
-                  Marker(
-                    point: pickup,
-                    width: 40,
-                    height: 40,
-                    child: const Icon(
-                      Icons.location_on,
-                      color: AppTheme.primaryGreen,
-                      size: 40,
-                    ),
+          Builder(
+            builder: (context) {
+              final markers = <Marker>{
+                Marker(
+                  markerId: const MarkerId('pickup'),
+                  position: pickup.toMaps,
+                  icon: BitmapDescriptor.defaultMarkerWithHue(
+                    BitmapDescriptor.hueGreen,
                   ),
-                  if (_destination != null)
-                    Marker(
-                      point: _destination!,
-                      width: 40,
-                      height: 40,
-                      child: const Icon(
-                        Icons.flag,
-                        color: AppTheme.errorRed,
-                        size: 40,
-                      ),
-                    ),
-                ],
-              ),
-              // Road-following polyline
-              if (_destination != null)
-                _RoutingPolyline(
-                  driverPoint: pickup,
-                  pickupPoint: _destination!,
+                  infoWindow: const InfoWindow(title: 'Pickup'),
                 ),
-            ],
+                if (_destination != null)
+                  Marker(
+                    markerId: const MarkerId('destination'),
+                    position: _destination!.toMaps,
+                    icon: BitmapDescriptor.defaultMarkerWithHue(
+                      BitmapDescriptor.hueRed,
+                    ),
+                    infoWindow: const InfoWindow(title: 'Destination'),
+                  ),
+              };
+
+              Widget map(Set<Polyline> polylines) => AppGoogleMap(
+                initialCenter: pickup,
+                initialZoom: 15,
+                onTap: _onMapTapped,
+                markers: markers,
+                polylines: polylines,
+              );
+
+              if (_destination == null) return map(const {});
+              return RouteBuilder(
+                from: pickup,
+                to: _destination!,
+                builder: (context, polylines) => map(polylines),
+              );
+            },
           ),
           // Instructions
           Positioned(
@@ -388,56 +386,3 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
 
 // ─── Routing Polyline Widget ────────────────────────────────────────────────
 
-class _RoutingPolyline extends StatefulWidget {
-  final LatLng driverPoint;
-  final LatLng pickupPoint;
-
-  const _RoutingPolyline({
-    required this.driverPoint,
-    required this.pickupPoint,
-  });
-
-  @override
-  State<_RoutingPolyline> createState() => _RoutingPolylineState();
-}
-
-class _RoutingPolylineState extends State<_RoutingPolyline> {
-  List<LatLng>? _routePoints;
-
-  @override
-  void initState() {
-    super.initState();
-    _fetchRoute();
-  }
-
-  @override
-  void didUpdateWidget(covariant _RoutingPolyline oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.driverPoint != widget.driverPoint ||
-        oldWidget.pickupPoint != widget.pickupPoint) {
-      _fetchRoute();
-    }
-  }
-
-  Future<void> _fetchRoute() async {
-    try {
-      final points = await RoutingService.instance.getRoute(
-        widget.driverPoint,
-        widget.pickupPoint,
-      );
-      if (mounted) setState(() => _routePoints = points);
-    } catch (e) {
-      if (mounted) setState(() => _routePoints = null);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final points = _routePoints ?? [widget.driverPoint, widget.pickupPoint];
-    return PolylineLayer(
-      polylines: [
-        Polyline(points: points, color: AppTheme.primaryBlue, strokeWidth: 3),
-      ],
-    );
-  }
-}

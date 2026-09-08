@@ -2449,14 +2449,8 @@ class _ProfileTabState extends State<_ProfileTab> {
                     title: const Text('About App'),
                     subtitle: const Text('TODA E-QUEUE+ v1.0.0'),
                     trailing: const Icon(Icons.chevron_right),
-                    onTap: () {
-                      showAboutDialog(
-                        context: context,
-                        applicationName: 'TODA E-QUEUE+',
-                        applicationVersion: 'v1.0.0',
-                        applicationLegalese: 'Federation of Baliwag City TODA',
-                      );
-                    },
+                    onTap: () =>
+                        Navigator.pushNamed(context, AppRoutes.about),
                   ),
                 ],
               ),

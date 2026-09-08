@@ -10,6 +10,7 @@ import '../../../config/routes.dart';
 import '../booking/payment_screen.dart';
 import 'widgets/trip_status_card.dart';
 import '../../../core/models/trip_state.dart';
+import '../../../core/services/trip_service.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class TripTrackingScreen extends StatefulWidget {
@@ -153,23 +154,30 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
     );
     if (confirmed != true || !mounted) return;
     try {
-      final batch = FirebaseFirestore.instance.batch();
-      batch.update(
-        FirebaseFirestore.instance.collection('bookings').doc(widget.bookingId),
-        {
-          'status': 'cancelled',
-          'cancelledAt': FieldValue.serverTimestamp(),
-          'cancelledReason': 'Passenger cancelled the trip',
-        },
+      // Go through the state machine so tripStatus is set too. Writing only
+      // the legacy `status` field left the trip reading as still active,
+      // because TripState prefers tripStatus.
+      await TripService.instance.moveTrip(
+        bookingId: widget.bookingId,
+        to: TripStatus.cancelled,
+        by: TripRole.passenger,
       );
+      await FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(widget.bookingId)
+          .update({'cancelledReason': 'Passenger cancelled the trip'});
+
+      // The queue entry is the driver's own bookkeeping, not shared state.
       final qid = data['queueEntryId'] as String?;
       if (qid != null) {
-        batch.update(
-          FirebaseFirestore.instance.collection('queueEntries').doc(qid),
-          {'status': 'cancelled', 'cancelledAt': FieldValue.serverTimestamp()},
-        );
+        await FirebaseFirestore.instance
+            .collection('queueEntries')
+            .doc(qid)
+            .update({
+              'status': 'cancelled',
+              'cancelledAt': FieldValue.serverTimestamp(),
+            });
       }
-      await batch.commit();
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,

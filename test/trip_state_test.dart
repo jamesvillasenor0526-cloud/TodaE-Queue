@@ -447,4 +447,28 @@ void main() {
       }
     });
   });
+
+  group('cancellation must not leave a trip looking active', () {
+    test('a booking cancelled via legacy status alone still reads active', () {
+      // Reproduces the regression: writing only status:'cancelled' left
+      // tripStatus untouched, and TripState prefers tripStatus.
+      final legacyOnly = TripState.fromMap('b1', {
+        'tripStatus': 'DRIVER_ON_THE_WAY',
+        'status': 'cancelled',
+      });
+      expect(legacyOnly.trip, TripStatus.driverOnTheWay);
+      expect(legacyOnly.isActive, isTrue,
+          reason: 'this is why cancellation must go through TripService');
+    });
+
+    test('cancelling through the state machine reads as cancelled', () {
+      final proper = TripState.fromMap('b1', {
+        'tripStatus': 'CANCELLED',
+        'status': 'cancelled',
+      });
+      expect(proper.trip, TripStatus.cancelled);
+      expect(proper.isActive, isFalse);
+      expect(proper.trip.legacyStatus, 'cancelled');
+    });
+  });
 }

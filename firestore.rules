@@ -1,0 +1,95 @@
+rules_version = '2';
+
+// Scope note: this file closes one specific, confirmed gap — any signed-in
+// driver could set their own `isVerified`/`verificationStatus`/`role` fields
+// directly, self-approving without admin review. Everything else here
+// preserves the access patterns the app already relies on (verified by
+// reading every `.collection(...)` call site in lib/), rather than
+// tightening rules whose knock-on effects can't be checked without a
+// staging environment. In particular, `queueEntries` and `bookings` allow
+// broad authenticated read/write because the app has no backend
+// intermediary — a passenger's client writes directly into a driver's queue
+// entry during dispatch, and either side can write a booking's payment
+// fields. Routing those writes through Cloud Functions would let them be
+// locked down properly; that's a larger change than this fix.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Fields a user must not be able to set on themselves — approval status
+    // and role are meant to be admin-controlled, even though no admin
+    // tooling exists yet in this app (see the gap this file closes).
+    function keepsProtectedFields() {
+      return request.resource.data.isVerified == resource.data.isVerified
+          && request.resource.data.verificationStatus == resource.data.verificationStatus
+          && request.resource.data.role == resource.data.role;
+    }
+
+    match /users/{userId} {
+      // Profiles are read across roles: a passenger reads a driver's
+      // gcashQrUrl/phone, a driver reads a passenger's name/phone, etc.
+      allow read: if signedIn();
+
+      // Registration creates the caller's own doc. isVerified must start
+      // false — nothing legitimate ever creates an already-verified user.
+      allow create: if signedIn()
+          && request.auth.uid == userId
+          && request.resource.data.isVerified == false;
+
+      // Callers may only edit their own profile, and never the
+      // approval/role fields — that's the gap this file closes.
+      allow update: if signedIn()
+          && request.auth.uid == userId
+          && keepsProtectedFields();
+
+      allow delete: if false;
+    }
+
+    // Terminal definitions are reference data with no client writer in the
+    // app (managed out-of-band, e.g. via console) — public read matches
+    // existing behavior (unauthenticated reads already worked before this
+    // file existed, since no rules were deployed at all).
+    match /terminals/{terminalId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /queueEntries/{entryId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.auth.uid == request.resource.data.driverId;
+      // Broad on purpose: a passenger's own client updates a driver's
+      // queue entry as part of the dispatch transaction. See file header.
+      allow update: if signedIn();
+      allow delete: if false;
+    }
+
+    match /bookings/{bookingId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.auth.uid == request.resource.data.passengerId;
+      // Broad on purpose: both driver and passenger write different fields
+      // on the same booking (accept/complete, payment method, payment
+      // confirmation). See file header.
+      allow update: if signedIn();
+      allow delete: if false;
+    }
+
+    match /receipts/{receiptId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      // driverConfirmPayment() sets driverConfirmed/confirmedAt.
+      allow update: if signedIn();
+      allow delete: if false;
+    }
+
+    match /ratings/{ratingId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.auth.uid == request.resource.data.passengerId;
+      // The rated driver can post a reply (driverReply/repliedAt).
+      allow update: if signedIn() && request.auth.uid == resource.data.driverId;
+      allow delete: if false;
+    }
+  }
+}

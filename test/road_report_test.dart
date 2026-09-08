@@ -158,6 +158,137 @@ void main() {
     });
   });
 
+  group('congestion zones', () {
+    final live = now.add(const Duration(minutes: 20));
+    // ~220 m and ~2.2 km north of the centre.
+    final close = LatLng(_center.latitude + 0.002, _center.longitude);
+    final away = LatLng(_center.latitude + 0.02, _center.longitude);
+
+    test('no live reports produces no zones', () {
+      expect(buildCongestionZones(const [], now: now), isEmpty);
+      expect(
+        buildCongestionZones([
+          _report(expiresAt: now.subtract(const Duration(minutes: 1))),
+        ], now: now),
+        isEmpty,
+      );
+    });
+
+    test('nearby reports merge into a single zone', () {
+      final zones = buildCongestionZones([
+        _report(id: 'a', at: _center, expiresAt: live),
+        _report(id: 'b', at: close, expiresAt: live),
+      ], now: now);
+      expect(zones, hasLength(1));
+      expect(zones.single.reports, hasLength(2));
+    });
+
+    test('distant reports stay in separate zones', () {
+      final zones = buildCongestionZones([
+        _report(id: 'a', at: _center, expiresAt: live),
+        _report(id: 'b', at: away, expiresAt: live),
+      ], now: now);
+      expect(zones, hasLength(2));
+    });
+
+    test('heavy traffic scores higher than moderate, which beats clear', () {
+      double sev(ReportType t) => buildCongestionZones([
+        _report(type: t, expiresAt: live),
+      ], now: now).single.severity;
+
+      expect(sev(ReportType.trafficHeavy), greaterThan(sev(ReportType.trafficModerate)));
+      expect(
+        sev(ReportType.trafficModerate),
+        greaterThan(sev(ReportType.trafficClear)),
+      );
+    });
+
+    test('a clear report pulls a heavy one down to something in between', () {
+      final blended = buildCongestionZones([
+        _report(id: 'a', type: ReportType.trafficHeavy, at: _center,
+            expiresAt: live),
+        _report(id: 'b', type: ReportType.trafficClear, at: close,
+            expiresAt: live),
+      ], now: now).single;
+
+      expect(blended.severity, greaterThan(0));
+      expect(blended.severity, lessThan(1));
+    });
+
+    test('a confirmed report outweighs an unconfirmed contrary one', () {
+      final zone = buildCongestionZones([
+        _report(id: 'a', type: ReportType.trafficHeavy, at: _center,
+            confirmations: 5, createdAt: now, expiresAt: live),
+        _report(id: 'b', type: ReportType.trafficClear, at: close,
+            createdAt: now, expiresAt: live),
+      ], now: now).single;
+
+      // Weighted towards the corroborated heavy report rather than a
+      // straight average, which would sit at 0.5.
+      expect(zone.severity, greaterThan(0.5));
+    });
+
+    test('an aging report loses influence to a fresh contrary one', () {
+      final old = _report(
+        id: 'old',
+        type: ReportType.trafficHeavy,
+        at: _center,
+        createdAt: now.subtract(const Duration(minutes: 29)),
+        expiresAt: now.add(const Duration(minutes: 1)),
+      );
+      final fresh = _report(
+        id: 'fresh',
+        type: ReportType.trafficClear,
+        at: close,
+        createdAt: now,
+        expiresAt: now.add(const Duration(minutes: 30)),
+      );
+      final zone = buildCongestionZones([old, fresh], now: now).single;
+      expect(zone.severity, lessThan(0.5));
+    });
+
+    test('severity maps onto distinct colours and labels', () {
+      CongestionZone z(double s) => CongestionZone(
+        center: _center,
+        severity: s,
+        radiusMeters: 100,
+        reports: const [],
+      );
+
+      expect(z(0).label, 'Clear');
+      expect(z(0.35).label, 'Light traffic');
+      expect(z(0.6).label, 'Moderate traffic');
+      expect(z(0.9).label, 'Heavy traffic');
+      expect(z(0).color, isNot(z(1).color));
+      // Stronger conditions are drawn more solidly than slight ones.
+      expect(z(1).fillOpacity, greaterThan(z(0).fillOpacity));
+    });
+
+    test('a busier zone is drawn larger than a lone report', () {
+      final lone = buildCongestionZones([
+        _report(id: 'a', at: _center, expiresAt: live),
+      ], now: now).single;
+      final busy = buildCongestionZones([
+        _report(id: 'a', at: _center, expiresAt: live),
+        _report(id: 'b', at: close, expiresAt: live),
+        _report(id: 'c', at: close, expiresAt: live),
+      ], now: now).single;
+
+      expect(busy.radiusMeters, greaterThan(lone.radiusMeters));
+    });
+
+    test('expired reports are left out of the blend', () {
+      final zones = buildCongestionZones([
+        _report(id: 'live', type: ReportType.trafficClear, at: _center,
+            expiresAt: live),
+        _report(id: 'dead', type: ReportType.trafficHeavy, at: close,
+            expiresAt: now.subtract(const Duration(minutes: 5))),
+      ], now: now);
+
+      expect(zones.single.reports.map((r) => r.id), ['live']);
+    });
+  });
+
   group('fromMap', () {
     test('reads a well-formed document', () {
       final r = RoadReport.fromMap('abc', {

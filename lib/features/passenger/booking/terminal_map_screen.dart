@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 import '../../../config/theme.dart';
 import '../../../config/routes.dart';
 import '../../../core/services/dispatch_service.dart';
+import '../../../core/models/road_report.dart';
 import '../../shared/reports/report_map_layer.dart';
 import '../../shared/reports/report_sheet.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -29,7 +30,7 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
 
   LatLng? _userLocation;
   Map<String, double> _terminalDistances = {};
-  int _liveReportCount = 0;
+  List<RoadReport> _nearbyReports = const [];
 
   LatLng? _parseBoundaryPoint(dynamic raw) {
     try {
@@ -355,18 +356,19 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
                         'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                     userAgentPackageName: 'com.example.toda_equeue_plus',
                   ),
-                  MarkerLayer(markers: markers),
-                  // Crowd-sourced traffic and incidents, centred on the
-                  // user once their position is known.
-                  ReportMarkerLayer(
+                  // Shaded beneath the terminal pins so the traffic colour
+                  // never hides the thing the user came here to tap.
+                  TrafficOverlay(
                     origin: _userLocation ?? _baliwagCenter,
                     onReportsChanged: (reports) {
-                      if (!mounted || reports.length == _liveReportCount) {
+                      if (!mounted ||
+                          reports.length == _nearbyReports.length) {
                         return;
                       }
-                      setState(() => _liveReportCount = reports.length);
+                      setState(() => _nearbyReports = reports);
                     },
                   ),
+                  MarkerLayer(markers: markers),
                 ],
               );
             },
@@ -499,48 +501,61 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
             ),
           ),
 
-          // Tells the user the overlay is live even when no pin is on screen.
-          if (_liveReportCount > 0)
+          // The shading has no tappable pins, so this is the way into the
+          // detail behind it — and it doubles as a hint that the overlay is
+          // live rather than decorative.
+          if (_nearbyReports.isNotEmpty)
             Positioned(
               top: 70,
               left: 12,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.white,
+              child: Semantics(
+                button: true,
+                child: InkWell(
+                  onTap: () => showConditionsSheet(context, _nearbyReports),
                   borderRadius: BorderRadius.circular(AppRadius.pill),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Colors.black26,
-                      blurRadius: 6,
-                      offset: Offset(0, 2),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
                     ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.traffic,
-                      size: 14,
-                      color: AppTheme.warning,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(AppRadius.pill),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black26,
+                          blurRadius: 6,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '$_liveReportCount nearby '
-                      '${_liveReportCount == 1 ? 'report' : 'reports'}',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.traffic,
+                          size: 14,
+                          color: AppTheme.warning,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          '${_nearbyReports.length} nearby '
+                          '${_nearbyReports.length == 1 ? 'report' : 'reports'}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(Icons.chevron_right, size: 14),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),
+
+          const Positioned(bottom: 16, left: 12, child: TrafficLegend()),
 
           // Searched location indicator
           if (_searchedLocationName != null)

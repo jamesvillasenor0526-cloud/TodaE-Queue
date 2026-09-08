@@ -23,6 +23,7 @@ import '../../../widgets/state_views.dart';
 import 'widgets/trip_action_panel.dart';
 import '../../../core/models/trip_state.dart';
 import '../../../core/services/trip_service.dart';
+import '../../../core/models/road_report.dart';
 import '../../shared/reports/report_map_layer.dart';
 import '../../shared/reports/report_sheet.dart';
 
@@ -1679,7 +1680,7 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
                         pickupPoint: pickupPoint,
                       ),
                     ],
-                    ReportMarkerLayer(origin: driverPoint, radiusKm: 3),
+                    TrafficOverlay(origin: driverPoint, radiusKm: 3),
                     MarkerLayer(
                       markers: [
                         Marker(
@@ -1822,6 +1823,7 @@ class _DriverMapTabState extends State<_DriverMapTab> {
   double _zoom = 16;
   bool _locationUnavailable = false;
   String? _assignedTerminalName;
+  List<RoadReport> _nearbyReports = const [];
 
   @override
   void initState() {
@@ -2070,11 +2072,30 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                   userAgentPackageName: 'com.example.toda_equeue_plus',
                 ),
                 CircleLayer(circles: circles),
-                MarkerLayer(markers: markers),
                 // Drivers are the main source of these reports and the main
-                // audience for them, so the overlay lives on their map too.
-                ReportMarkerLayer(origin: _myPosition ?? _baliwagCenter),
+                // audience for them. Shaded under the markers so terminals
+                // and vehicles stay readable on top of the traffic colour.
+                TrafficOverlay(
+                  origin: _myPosition ?? _baliwagCenter,
+                  onReportsChanged: (reports) {
+                    if (!mounted || reports.length == _nearbyReports.length) {
+                      return;
+                    }
+                    setState(() => _nearbyReports = reports);
+                  },
+                ),
+                MarkerLayer(markers: markers),
               ],
+            ),
+            Positioned(
+              top: 12,
+              right: 12,
+              child: GestureDetector(
+                onTap: _nearbyReports.isEmpty
+                    ? null
+                    : () => showConditionsSheet(context, _nearbyReports),
+                child: const TrafficLegend(),
+              ),
             ),
             if (_locationUnavailable)
               Positioned(

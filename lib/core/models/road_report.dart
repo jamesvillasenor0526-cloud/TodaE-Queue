@@ -81,6 +81,19 @@ enum ReportType {
     ReportType.breakdown => AppTheme.warning,
   };
 
+  /// How bad this condition is for someone trying to get through, 0 (clear)
+  /// to 1 (impassable). Drives the colour of the traffic overlay.
+  double get severity => switch (this) {
+    ReportType.trafficClear => 0,
+    ReportType.trafficModerate => 0.5,
+    ReportType.trafficHeavy => 1,
+    ReportType.breakdown => 0.5,
+    ReportType.hazard => 0.55,
+    ReportType.flooding => 0.75,
+    ReportType.accident => 0.9,
+    ReportType.roadClosure => 1,
+  };
+
   /// How long a report stays live before it stops being shown.
   ///
   /// Traffic changes minute to minute, so those expire quickly; an accident
@@ -133,6 +146,23 @@ class RoadReport {
   }
 
   bool confirmedByUser(String uid) => confirmedBy.contains(uid);
+
+  /// How much this report should count towards a zone's colour.
+  ///
+  /// Corroborated reports pull harder than a lone voice, and a report loses
+  /// influence as it ages towards its expiry — so a zone fades out on its own
+  /// as conditions go unconfirmed rather than staying red all afternoon.
+  double weight(DateTime now) {
+    final corroboration = 1 + confirmations.clamp(0, 8);
+    final from = createdAt, until = expiresAt;
+    var freshness = 1.0;
+    if (from != null && until != null && until.isAfter(from)) {
+      final total = until.difference(from).inSeconds;
+      final elapsed = now.difference(from).inSeconds.clamp(0, total);
+      freshness = 1 - 0.6 * (elapsed / total);
+    }
+    return corroboration * freshness;
+  }
 
   /// Reports corroborated by others are worth trusting more; used to weight
   /// the marker so a single stale report doesn't dominate the map.
@@ -194,6 +224,125 @@ class RoadReport {
 /// is near enough to show, without pulling in a routing call.
 double distanceKm(LatLng a, LatLng b) =>
     const Distance().as(LengthUnit.Kilometer, a, b);
+
+/// A patch of road that several reports agree about, drawn as one shaded
+/// area on the map instead of a scatter of individual pins.
+class CongestionZone {
+  /// Weighted centre of the reports that make up this zone.
+  final LatLng center;
+
+  /// 0 (clear) to 1 (impassable) — the blended severity of its reports.
+  final double severity;
+
+  /// Drawn radius in metres. Grows a little with the number of reports, so a
+  /// stretch several people flagged reads as bigger than a single sighting.
+  final double radiusMeters;
+
+  /// The reports behind this zone, worst first.
+  final List<RoadReport> reports;
+
+  const CongestionZone({
+    required this.center,
+    required this.severity,
+    required this.radiusMeters,
+    required this.reports,
+  });
+
+  /// The condition driving the zone's colour, used to label it.
+  ReportType get dominantType => reports.first.type;
+
+  /// Strong red through to a slight green, by severity.
+  Color get color {
+    const clear = Color(0xFF2E7D32);
+    const light = Color(0xFFC0CA33);
+    const moderate = Color(0xFFE58900);
+    const heavy = Color(0xFFEF6C00);
+    const severe = Color(0xFFD32F2F);
+
+    final s = severity.clamp(0.0, 1.0);
+    return switch (s) {
+      < 0.25 => Color.lerp(clear, light, s / 0.25)!,
+      < 0.5 => Color.lerp(light, moderate, (s - 0.25) / 0.25)!,
+      < 0.75 => Color.lerp(moderate, heavy, (s - 0.5) / 0.25)!,
+      _ => Color.lerp(heavy, severe, (s - 0.75) / 0.25)!,
+    };
+  }
+
+  /// Faint where conditions are slight, solid where they are bad.
+  double get fillOpacity => 0.16 + 0.34 * severity.clamp(0.0, 1.0);
+
+  String get label => switch (severity) {
+    < 0.25 => 'Clear',
+    < 0.5 => 'Light traffic',
+    < 0.75 => 'Moderate traffic',
+    _ => 'Heavy traffic',
+  };
+}
+
+/// Groups nearby reports into shaded zones for the traffic overlay.
+///
+/// Greedy single-pass clustering: reports are taken worst-first, and each
+/// one either joins the zone it is closest to or starts a new one. At the
+/// handful-of-reports-per-city scale this app works at, that is both cheap
+/// and stable enough that zones don't jump around between rebuilds.
+List<CongestionZone> buildCongestionZones(
+  Iterable<RoadReport> reports, {
+  required DateTime now,
+  double clusterRadiusKm = 0.4,
+}) {
+  final live = reports.where((r) => r.isLive(now)).toList()
+    ..sort((a, b) => b.type.severity.compareTo(a.type.severity));
+  if (live.isEmpty) return const [];
+
+  final groups = <List<RoadReport>>[];
+  for (final report in live) {
+    List<RoadReport>? nearest;
+    var nearestDistance = double.infinity;
+    for (final group in groups) {
+      final d = distanceKm(group.first.location, report.location);
+      if (d <= clusterRadiusKm && d < nearestDistance) {
+        nearest = group;
+        nearestDistance = d;
+      }
+    }
+    if (nearest == null) {
+      groups.add([report]);
+    } else {
+      nearest.add(report);
+    }
+  }
+
+  return groups.map((group) {
+    var totalWeight = 0.0;
+    var weightedSeverity = 0.0;
+    var lat = 0.0;
+    var lng = 0.0;
+    for (final r in group) {
+      final w = r.weight(now);
+      totalWeight += w;
+      weightedSeverity += r.type.severity * w;
+      lat += r.location.latitude * w;
+      lng += r.location.longitude * w;
+    }
+    // Every weight is positive, but guard the division rather than risk a
+    // NaN reaching the map layer.
+    if (totalWeight <= 0) {
+      return CongestionZone(
+        center: group.first.location,
+        severity: group.first.type.severity,
+        radiusMeters: 180,
+        reports: group,
+      );
+    }
+    return CongestionZone(
+      center: LatLng(lat / totalWeight, lng / totalWeight),
+      severity: (weightedSeverity / totalWeight).clamp(0.0, 1.0),
+      radiusMeters: 160 + 110 * (weightedSeverity / totalWeight) +
+          35 * (group.length - 1).clamp(0, 6),
+      reports: group,
+    );
+  }).toList();
+}
 
 /// Reports worth showing to someone at [origin]: live, within [radiusKm],
 /// nearest first. Filtering happens client-side because the whole service

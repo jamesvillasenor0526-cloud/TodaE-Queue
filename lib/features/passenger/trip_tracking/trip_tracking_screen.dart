@@ -605,7 +605,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                         // Traffic and incidents matter most while you are
                         // actually on the road, so the overlay follows the
                         // trip too.
-                        ReportMarkerLayer(origin: mapCenter, radiusKm: 3),
+                        TrafficOverlay(origin: mapCenter, radiusKm: 3),
                       ],
                     ),
                     // Recenter button

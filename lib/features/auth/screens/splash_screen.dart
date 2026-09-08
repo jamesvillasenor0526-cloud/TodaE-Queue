@@ -40,11 +40,25 @@ class _SplashScreenState extends State<SplashScreen>
     if (!mounted) return;
 
     final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      Navigator.pushReplacementNamed(context, AppRoutes.roleSelect);
-    } else {
+    if (user == null) {
       Navigator.pushReplacementNamed(context, AppRoutes.login);
+      return;
     }
+
+    // A restored session must clear the same verification gate as a fresh
+    // sign-in, otherwise reopening the app bypasses it.
+    try {
+      await user.reload();
+    } catch (_) {
+      // Offline: trust the cached flag rather than stranding the user.
+    }
+    if (!mounted) return;
+
+    final verified = FirebaseAuth.instance.currentUser?.emailVerified ?? false;
+    Navigator.pushReplacementNamed(
+      context,
+      verified ? AppRoutes.roleSelect : AppRoutes.verifyEmail,
+    );
   }
 
   @override

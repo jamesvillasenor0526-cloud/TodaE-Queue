@@ -32,13 +32,26 @@ class _LoginScreenState extends State<LoginScreen> {
       _errorMessage = null;
     });
     try {
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
+      final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
-      if (mounted) {
-        Navigator.pushReplacementNamed(context, AppRoutes.roleSelect);
+
+      // Verification is a gate, not a suggestion: an unverified account
+      // could otherwise sign in and book real trips. Re-read the user so a
+      // link clicked on another device is picked up straight away.
+      try {
+        await cred.user?.reload();
+      } catch (_) {
+        // Offline: fall back to the cached flag rather than blocking login.
       }
+      final verified = FirebaseAuth.instance.currentUser?.emailVerified ?? false;
+
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(
+        context,
+        verified ? AppRoutes.roleSelect : AppRoutes.verifyEmail,
+      );
     } on FirebaseAuthException catch (e) {
       setState(() {
         _errorMessage = switch (e.code) {

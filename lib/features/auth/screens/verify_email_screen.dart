@@ -70,6 +70,17 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
     }
   }
 
+  Future<void> _signOut() async {
+    _checkTimer?.cancel();
+    await FirebaseAuth.instance.signOut();
+    if (!mounted) return;
+    Navigator.pushNamedAndRemoveUntil(
+      context,
+      AppRoutes.login,
+      (route) => false,
+    );
+  }
+
   @override
   void dispose() {
     _checkTimer?.cancel();
@@ -138,6 +149,13 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
             TextButton(
               onPressed: _checkNow,
               child: const Text('I\'ve Verified — Continue'),
+            ),
+            const SizedBox(height: 4),
+            // Without this the screen is a dead end: it is reached by
+            // pushReplacement, so there is nothing to go back to.
+            TextButton(
+              onPressed: _signOut,
+              child: const Text('Use a different account'),
             ),
           ],
         ),

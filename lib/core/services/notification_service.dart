@@ -109,4 +109,27 @@ class NotificationService {
       payload: 'queue',
     );
   }
+
+  /// Generic trip/payment state-change notice. Fired by [TripService] once a
+  /// transition has actually committed to the backend, never from a button
+  /// press, so the notification always reflects real stored state.
+  Future<void> showNotification({
+    required String title,
+    required String body,
+  }) async {
+    await initialize();
+
+    const androidDetails = AndroidNotificationDetails(
+      'trip_channel',
+      'Trip Updates',
+      channelDescription: 'Trip and payment status changes',
+      importance: Importance.high,
+      priority: Priority.high,
+      icon: '@mipmap/ic_launcher',
+    );
+
+    const details = NotificationDetails(android: androidDetails);
+
+    await _plugin.show(4, title, body, details, payload: 'trip');
+  }
 }

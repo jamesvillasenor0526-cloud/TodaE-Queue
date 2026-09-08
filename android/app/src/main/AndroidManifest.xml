@@ -3,9 +3,10 @@
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.CAMERA"/>
 
     <application
-        android:label="toda_equeue_plus"
+        android:label="TODA E-QUEUE+"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

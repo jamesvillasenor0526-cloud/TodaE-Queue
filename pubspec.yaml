@@ -10,6 +10,10 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
+  cloudinary: ^1.2.0
+  http: ^1.1.2
+  url_launcher: ^6.2.5
+  shared_preferences: ^2.2.3
 
   # Firebase
   firebase_core: ^3.13.1
@@ -23,7 +27,6 @@ dependencies:
   geolocator: ^14.0.3
 
   # ML Kit & Camera
-  google_mlkit_face_detection: ^0.11.0
   camera: ^0.11.0
 
   # State Management
@@ -35,6 +38,7 @@ dependencies:
   cached_network_image: ^3.4.1
   image_picker: ^1.1.2
   flutter_local_notifications: ^18.0.1
+  permission_handler: ^11.4.0
 
 dev_dependencies:
   flutter_test:
@@ -43,3 +47,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/images/

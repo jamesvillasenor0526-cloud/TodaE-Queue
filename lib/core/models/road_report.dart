@@ -252,32 +252,40 @@ class CongestionZone {
   ReportType get dominantType => reports.first.type;
 
   /// Strong red through to a slight green, by severity.
-  Color get color {
-    const clear = Color(0xFF2E7D32);
-    const light = Color(0xFFC0CA33);
-    const moderate = Color(0xFFE58900);
-    const heavy = Color(0xFFEF6C00);
-    const severe = Color(0xFFD32F2F);
-
-    final s = severity.clamp(0.0, 1.0);
-    return switch (s) {
-      < 0.25 => Color.lerp(clear, light, s / 0.25)!,
-      < 0.5 => Color.lerp(light, moderate, (s - 0.25) / 0.25)!,
-      < 0.75 => Color.lerp(moderate, heavy, (s - 0.5) / 0.25)!,
-      _ => Color.lerp(heavy, severe, (s - 0.75) / 0.25)!,
-    };
-  }
+  Color get color => severityColor(severity);
 
   /// Faint where conditions are slight, solid where they are bad.
   double get fillOpacity => 0.16 + 0.34 * severity.clamp(0.0, 1.0);
 
-  String get label => switch (severity) {
-    < 0.25 => 'Clear',
-    < 0.5 => 'Light traffic',
-    < 0.75 => 'Moderate traffic',
-    _ => 'Heavy traffic',
+  String get label => severityLabel(severity);
+}
+
+/// The traffic colour ramp: a slight green through to a strong red.
+///
+/// Shared by the road segments and the fallback zone shading so the two
+/// never disagree about what a given severity looks like.
+Color severityColor(double severity) {
+  const clear = Color(0xFF2E7D32);
+  const light = Color(0xFFC0CA33);
+  const moderate = Color(0xFFE58900);
+  const heavy = Color(0xFFEF6C00);
+  const severe = Color(0xFFD32F2F);
+
+  final s = severity.clamp(0.0, 1.0);
+  return switch (s) {
+    < 0.25 => Color.lerp(clear, light, s / 0.25)!,
+    < 0.5 => Color.lerp(light, moderate, (s - 0.25) / 0.25)!,
+    < 0.75 => Color.lerp(moderate, heavy, (s - 0.5) / 0.25)!,
+    _ => Color.lerp(heavy, severe, (s - 0.75) / 0.25)!,
   };
 }
+
+String severityLabel(double severity) => switch (severity) {
+  < 0.25 => 'Clear',
+  < 0.5 => 'Light traffic',
+  < 0.75 => 'Moderate traffic',
+  _ => 'Heavy traffic',
+};
 
 /// Groups nearby reports into shaded zones for the traffic overlay.
 ///

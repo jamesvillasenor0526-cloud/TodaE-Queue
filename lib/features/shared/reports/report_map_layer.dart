@@ -5,16 +5,23 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../config/theme.dart';
 import '../../../core/models/road_report.dart';
+import '../../../core/models/traffic_segment.dart';
 import '../../../core/services/report_service.dart';
+import '../../../core/services/road_geometry_service.dart';
 
-/// Shades live traffic and incident reports onto a [FlutterMap] as coloured
-/// congestion zones — strong red where conditions are bad, fading to a
-/// slight green where they are clear.
+/// Paints live traffic and incident reports onto a [FlutterMap] as coloured
+/// road segments — strong red where conditions are bad, fading to a slight
+/// green where they are clear, the way a navigation app shows congestion.
 ///
 /// Deliberately not pins: a scatter of individual markers reads as clutter
 /// and says nothing about how bad a stretch of road actually is. Nearby
-/// reports are blended into one zone instead, and the detail behind them is
-/// reached through [showConditionsSheet].
+/// reports are blended into one zone, that zone is snapped onto the real
+/// road beneath it, and the detail behind it is reached through
+/// [showConditionsSheet].
+///
+/// Road shapes come from OpenStreetMap and may be slow or unavailable, so
+/// zones with no road resolved yet are shaded as soft areas instead. That is
+/// also what the map shows on first paint, before the geometry arrives.
 ///
 /// Drop it into the map's `children` after the tile layer. The subscription
 /// is owned here and re-centred only when [origin] moves meaningfully, so a
@@ -48,6 +55,11 @@ class _TrafficOverlayState extends State<TrafficOverlay> {
   late Stream<List<RoadReport>> _stream;
   late LatLng _subscribedOrigin;
   List<RoadReport>? _lastNotified;
+
+  /// Road shapes resolved so far. Empty until Overpass answers, which is why
+  /// the zone shading has to stand on its own as a first paint.
+  List<RoadWay> _ways = const [];
+  String? _resolvedFor;
 
   @override
   void initState() {
@@ -92,31 +104,90 @@ class _TrafficOverlayState extends State<TrafficOverlay> {
         }
 
         final zones = buildCongestionZones(reports, now: DateTime.now());
-        return CircleLayer(
-          circles: [
-            // A soft halo under each zone so neighbouring areas blend into
-            // one another rather than reading as hard-edged discs.
-            for (final z in zones)
-              CircleMarker(
-                point: z.center,
-                radius: z.radiusMeters * 1.7,
-                useRadiusInMeter: true,
-                color: z.color.withValues(alpha: z.fillOpacity * 0.35),
-                borderStrokeWidth: 0,
+        _resolveGeometry(zones);
+
+        final (:segments, :unplaced) = buildTrafficSegments(zones, _ways);
+
+        return Stack(
+          children: [
+            if (unplaced.isNotEmpty)
+              CircleLayer(
+                circles: [
+                  // A soft halo so a zone with no road under it still reads
+                  // as an area rather than a hard-edged disc.
+                  for (final z in unplaced)
+                    CircleMarker(
+                      point: z.center,
+                      radius: z.radiusMeters * 1.7,
+                      useRadiusInMeter: true,
+                      color: z.color.withValues(alpha: z.fillOpacity * 0.35),
+                      borderStrokeWidth: 0,
+                    ),
+                  for (final z in unplaced)
+                    CircleMarker(
+                      point: z.center,
+                      radius: z.radiusMeters,
+                      useRadiusInMeter: true,
+                      color: z.color.withValues(alpha: z.fillOpacity),
+                      borderColor: z.color.withValues(alpha: 0.7),
+                      borderStrokeWidth: 1.5,
+                    ),
+                ],
               ),
-            for (final z in zones)
-              CircleMarker(
-                point: z.center,
-                radius: z.radiusMeters,
-                useRadiusInMeter: true,
-                color: z.color.withValues(alpha: z.fillOpacity),
-                borderColor: z.color.withValues(alpha: 0.7),
-                borderStrokeWidth: 1.5,
+            if (segments.isNotEmpty) ...[
+              // A dark casing under the colour, so a red road still reads as
+              // a road against light tiles and busy backgrounds.
+              PolylineLayer(
+                polylines: [
+                  for (final s in segments)
+                    Polyline(
+                      points: s.points,
+                      strokeWidth: s.strokeWidth + 4,
+                      color: Colors.black.withValues(alpha: 0.25),
+                      strokeCap: StrokeCap.round,
+                      strokeJoin: StrokeJoin.round,
+                    ),
+                ],
               ),
+              PolylineLayer(
+                polylines: [
+                  for (final s in segments)
+                    Polyline(
+                      points: s.points,
+                      strokeWidth: s.strokeWidth,
+                      color: s.color,
+                      strokeCap: StrokeCap.round,
+                      strokeJoin: StrokeJoin.round,
+                    ),
+                ],
+              ),
+            ],
           ],
         );
       },
     );
+  }
+
+  /// Asks for the road shapes under [zones], once per distinct set.
+  ///
+  /// Fire-and-forget: the map has already painted the zone shading, and this
+  /// upgrades it to road segments when (and if) the geometry arrives.
+  void _resolveGeometry(List<CongestionZone> zones) {
+    if (zones.isEmpty) return;
+    final key = zones
+        .map(
+          (z) =>
+              '${z.center.latitude.toStringAsFixed(3)},'
+              '${z.center.longitude.toStringAsFixed(3)}',
+        )
+        .join('|');
+    if (key == _resolvedFor) return;
+    _resolvedFor = key;
+
+    RoadGeometryService.instance.waysFor(zones).then((ways) {
+      if (!mounted || ways.isEmpty) return;
+      setState(() => _ways = ways);
+    });
   }
 }
 

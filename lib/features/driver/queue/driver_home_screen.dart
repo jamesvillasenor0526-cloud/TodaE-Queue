@@ -1035,24 +1035,15 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
                         ],
 
                         if (status == 'accepted') ...[
-                          const Icon(
-                            Icons.check_circle,
-                            color: AppTheme.success,
-                            size: 40,
-                          ),
-                          const SizedBox(height: 8),
-                          const Text(
-                            "Booking Accepted!",
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              color: AppTheme.success,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          const Text(
-                            'Navigate to the pickup location.',
-                            style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                          // The legacy `status` field collapses five trip
+                          // states into 'accepted', so it cannot say where
+                          // the driver is actually going. Reading tripStatus
+                          // keeps this heading honest — it used to insist
+                          // "navigate to the pickup location" while the map
+                          // and the navigation panel were both routing to
+                          // the destination.
+                          _AcceptedTripHeading(
+                            bookingId: data['bookingId'] as String? ?? '',
                           ),
                           const SizedBox(height: 16),
 
@@ -4016,6 +4007,99 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
               ),
             ),
             const SizedBox(height: 8),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Heading for an accepted trip, driven by the trip state machine.
+///
+/// The surrounding card keys off the legacy `status` field, which maps
+/// driverAccepted, driverOnTheWay, driverArrived, readyToStart and
+/// tripInProgress all onto 'accepted'. A fixed "navigate to the pickup
+/// location" was therefore still on screen once the passenger was aboard
+/// and the driver was being routed to the destination — the card and the
+/// map contradicting each other.
+class _AcceptedTripHeading extends StatelessWidget {
+  const _AcceptedTripHeading({required this.bookingId});
+
+  final String bookingId;
+
+  @override
+  Widget build(BuildContext context) {
+    if (bookingId.isEmpty) return const SizedBox.shrink();
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(bookingId)
+          .snapshots(),
+      builder: (context, snap) {
+        final data = snap.data?.data();
+        if (data == null) return const SizedBox.shrink();
+
+        final trip = TripState.fromMap(bookingId, data).trip;
+        final phase = NavigationPhase.forTrip(trip);
+
+        final (icon, colour, title, subtitle) = switch (trip) {
+          TripStatus.driverArrived => (
+            Icons.pin_drop,
+            AppTheme.info,
+            'You have arrived at the pickup',
+            'Wait for your passenger.',
+          ),
+          TripStatus.readyToStart => (
+            Icons.play_circle_outline,
+            AppTheme.success,
+            'Ready to start the trip',
+            'Payment is confirmed.',
+          ),
+          TripStatus.tripInProgress => (
+            Icons.navigation,
+            AppTheme.primaryBlue,
+            'Trip in progress',
+            'Navigate to the destination.',
+          ),
+          _ => (
+            Icons.check_circle,
+            AppTheme.success,
+            'Booking accepted',
+            'Navigate to the pickup location.',
+          ),
+        };
+
+        return Column(
+          children: [
+            Icon(icon, color: colour, size: 40),
+            const SizedBox(height: 8),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: colour,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: AppTheme.textMuted,
+                fontSize: 12,
+              ),
+            ),
+            if (phase == NavigationPhase.atPickup) ...[
+              const SizedBox(height: 4),
+              const Text(
+                'Navigation resumes when the trip starts.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppTheme.textMuted, fontSize: 11),
+              ),
+            ],
           ],
         );
       },

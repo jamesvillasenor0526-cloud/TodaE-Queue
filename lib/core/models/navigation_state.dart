@@ -258,17 +258,38 @@ class RouteChoices {
         );
 }
 
+/// How much slower an alternative may be before it stops being a choice.
+///
+/// Alternatives are forced by routing via an offset waypoint, because the
+/// public OSRM server returns only one route. That reliably produces a
+/// *different* road, but not necessarily a sensible one — left unfiltered it
+/// offers things like a 19-minute loop against a clear 12-minute run, which
+/// no driver would take and which makes the whole panel look broken.
+const double kMaxDetourFraction = 0.35;
+
 /// Picks what to offer the driver from everything the router found.
 ///
-/// The best usable route is recommended. The alternative is the next best
-/// that is meaningfully different — offering a route two seconds slower down
-/// substantially the same roads is noise, not a choice.
+/// The best usable route is recommended. An alternative is only offered when
+/// it is genuinely worth weighing: meaningfully different from the
+/// recommendation, and not absurdly slower than it.
+///
+/// The exception is when the recommended route has something reported on it.
+/// Then a longer way round is exactly what the driver wants to see, however
+/// much slower it looks on paper, because the estimate for the short way is
+/// the part in doubt.
 RouteChoices? buildChoices(
   List<RouteScore> candidates, {
   Duration minDifference = const Duration(seconds: 30),
+  double maxDetourFraction = kMaxDetourFraction,
 }) {
   final best = chooseBest(candidates);
   if (best == null) return null;
+
+  // Something reported on the recommended route makes any usable detour
+  // worth showing.
+  final recommendedHasTrouble =
+      best.isBlocked || best.incidentsOnRoute.isNotEmpty;
+  final ceiling = best.adjustedSeconds * (1 + maxDetourFraction);
 
   RouteScore? alternative;
   for (final c in candidates) {
@@ -280,6 +301,7 @@ RouteChoices? buildChoices(
         minDifference.inSeconds) {
       continue;
     }
+    if (!recommendedHasTrouble && c.adjustedSeconds > ceiling) continue;
     if (alternative == null ||
         c.adjustedSeconds < alternative.adjustedSeconds) {
       alternative = c;

@@ -495,6 +495,35 @@ void main() {
       expect(choices.hasAlternative, isFalse);
     });
 
+    test('does not offer a wildly slower detour against a clear route', () {
+      // The case that made the panel look broken: a 19-minute loop offered
+      // beside a clear 12-minute run. No driver would take it.
+      final choices = buildChoices([plain(720), plain(1140)])!;
+      expect(choices.recommended.route.durationSeconds, 720);
+      expect(choices.hasAlternative, isFalse);
+    });
+
+    test('does offer a slightly slower one', () {
+      final choices = buildChoices([plain(720), plain(900)])!;
+      expect(choices.alternative?.route.durationSeconds, 900);
+    });
+
+    test('offers any detour once the short way has trouble on it', () {
+      // Here the recommendation's own estimate is the doubtful part, so a
+      // longer way round is exactly what the driver wants offered.
+      final troubled = scoreRoute(
+        _route(durationSeconds: 720),
+        [_report(type: ReportType.accident)],
+        now: now,
+      );
+      final longWayRound = plain(2400);
+
+      final choices = buildChoices([troubled, longWayRound])!;
+      expect(choices.recommended.incidentsOnRoute, isNotEmpty);
+      expect(choices.hasAlternative, isTrue);
+      expect(choices.alternative?.route.durationSeconds, 2400);
+    });
+
     test('says how much the alternative costs', () {
       final choices = buildChoices([plain(600), plain(720)])!;
       expect(choices.alternativeCost, const Duration(seconds: 120));

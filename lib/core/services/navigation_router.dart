@@ -68,15 +68,19 @@ class NavigationRouter {
     final pivot = avoid ?? _midpoint(from, to);
     final span = _degreesBetween(from, to);
 
-    for (final offset in const [0.25, -0.25, 0.45, -0.45]) {
+    // Gentle offsets first, so the least contrived detour is found before
+    // the wilder ones. A big offset produces a route that is certainly
+    // different and almost certainly useless.
+    for (final offset in const [0.12, -0.12, 0.22, -0.22, 0.35, -0.35]) {
       if (routes.length > maxAlternatives) break;
       final waypoint = _perpendicularOffset(from, to, pivot, span * offset);
       final candidate = await _request([from, waypoint, to]);
       if (candidate == null) continue;
 
-      // Only keep it if it is a materially different road, and not an absurd
-      // detour — a route twice as long helps nobody.
-      if (candidate.distanceMeters > direct.distanceMeters * 2.2) continue;
+      // A detour half again as long as the direct route is not a choice a
+      // driver would make. This used to allow 2.2x, which is how a 7.7 km
+      // run ended up offered against a 10.6 km loop.
+      if (candidate.distanceMeters > direct.distanceMeters * 1.5) continue;
       if (routes.any((r) => _overlapFraction(r, candidate) > 0.8)) continue;
       routes.add(candidate);
     }

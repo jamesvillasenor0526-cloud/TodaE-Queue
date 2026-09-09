@@ -1,20 +1,19 @@
 /// Tests for the TomTom routing parser.
 ///
-/// The fixtures below are hand-built to the shape TomTom documents for
-/// Calculate Route: routes[].summary.{lengthInMeters, travelTimeInSeconds,
-/// trafficDelayInSeconds} and routes[].legs[].points[].{latitude, longitude}.
-///
-/// They are NOT captured from the live service — that needs an API key, which
-/// this project does not have yet. So these prove the parser handles the
-/// documented shape and degrades safely on anything else; they do not prove
-/// the live response matches the documentation. That check belongs on the
-/// first real call.
+/// Two sets. The inline fixtures cover the documented shape and the ways a
+/// reply can be malformed. The other set runs against a response actually
+/// captured from the live service for a Baliwag trip, which is what caught
+/// the parser reading `routeOffsetInMeters` — distance from the start of the
+/// route — as though it were the length of a single step.
 library;
+
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:toda_equeue_plus/core/models/navigation_state.dart';
 import 'package:toda_equeue_plus/core/models/road_report.dart';
+import 'package:toda_equeue_plus/config/api_keys.dart';
 import 'package:toda_equeue_plus/core/services/tomtom_router.dart';
 
 const _twoRoutes = '''
@@ -146,9 +145,74 @@ void main() {
       expect(routes.first.distanceMeters, 0);
     });
 
-    test('routing is off until a key is configured', () {
-      // The app ships with an empty key and stays on OSRM.
-      expect(TomTomRouter.isConfigured, isFalse);
+    test('being configured is exactly having a non-empty key', () {
+      // Deliberately not asserting which state this machine is in.
+      // api_keys.dart is gitignored, so it holds a key on a developer's
+      // machine and none on a fresh clone; a test that demanded either
+      // would fail for somebody. What must hold in both is that the flag
+      // tracks the key, since it is what decides between TomTom and OSRM.
+      expect(TomTomRouter.isConfigured, ApiKeys.tomTom.trim().isNotEmpty);
+    });
+  });
+
+  group('against a response captured from the live service', () {
+    final body = File(
+      'test/fixtures/tomtom_baliwag_route.json',
+    ).readAsStringSync();
+
+    test('returns the real alternatives TomTom found', () {
+      // The reason for this whole integration: OSRM returns one route for
+      // this pair, TomTom returns three.
+      final routes = parseTomTomRoutes(body);
+      expect(routes, hasLength(3));
+      for (final r in routes) {
+        expect(r.points.length, greaterThan(100));
+        expect(r.distanceMeters, greaterThan(1000));
+        expect(r.durationSeconds, greaterThan(0));
+        expect(r.isTrafficAware, isTrue);
+      }
+    });
+
+    test('the first route is the quickest, as TomTom orders them', () {
+      final routes = parseTomTomRoutes(body);
+      for (final other in routes.skip(1)) {
+        expect(
+          routes.first.durationSeconds,
+          lessThanOrEqualTo(other.durationSeconds),
+        );
+      }
+    });
+
+    test('step distances are per-step, not measured from the start', () {
+      // routeOffsetInMeters counts from the beginning of the route. Read
+      // directly it would have told a driver to turn in 1851 m when the
+      // turn was 1851 m from where the trip started.
+      final steps = parseTomTomRoutes(body).first.steps;
+      expect(steps.length, greaterThan(2));
+
+      final total = parseTomTomRoutes(body).first.distanceMeters;
+      for (final s in steps) {
+        expect(s.distanceMeters, lessThan(total));
+        expect(s.distanceMeters, greaterThanOrEqualTo(0));
+      }
+      // Summing the steps should approximate the route, not exceed it.
+      final summed = steps.fold<double>(0, (a, s) => a + s.distanceMeters);
+      expect(summed, lessThanOrEqualTo(total + 1));
+    });
+
+    test('uses the phrasing TomTom supplies', () {
+      final steps = parseTomTomRoutes(body).first.steps;
+      expect(steps.first.instruction, isNotEmpty);
+      // The arrival instruction names the street TomTom knows about.
+      expect(steps.last.instruction.toLowerCase(), contains('arrived'));
+    });
+
+    test('every step yields a usable instruction', () {
+      for (final r in parseTomTomRoutes(body)) {
+        for (final s in r.steps) {
+          expect(s.instruction, isNotEmpty, reason: s.maneuver);
+        }
+      }
     });
   });
 

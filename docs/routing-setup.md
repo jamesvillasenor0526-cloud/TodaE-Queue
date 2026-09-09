@@ -62,12 +62,28 @@ An unrestricted key in a released APK can be lifted out and used by anyone
 against your quota. On the TomTom dashboard, restrict the key to the APIs it
 actually needs (Routing) and, where offered, to your application.
 
-## Not yet verified
+## Verified against the live service
 
-The parser was written to TomTom's documented response shape and is tested
-against fixtures built from it, but no live call has been made — that needs
-a key. The first real route is worth watching: check that a route comes back
-at all, that the ETA moves with traffic, and that alternatives appear.
+The parser was first written to TomTom's documented shape, then checked
+against a real Baliwag response — which caught a genuine mistake.
+`routeOffsetInMeters` is the distance from the **start of the route**, not
+the length of one step. Read directly it would have told a driver to turn in
+1851 m when the turn was 1851 m from where the trip began. Step distances
+are now the gap between consecutive instructions, and the captured response
+is committed as a test fixture so this cannot regress.
+
+For the same Baliwag pair, OSRM returns one route and TomTom returns three.
+
+**Expect longer ETAs.** TomTom is markedly more conservative: on one trip
+OSRM gave 12 min over 7.7 km, about 38 km/h, while TomTom gave 26 min over
+9.5 km, roughly 22 km/h. The second is far closer to what a tricycle
+actually does on these roads, so estimates should now be more honest even
+though they look worse.
+
+**Traffic delay has not been seen non-zero yet.** Every route tested came
+back with `trafficDelayInSeconds: 0`, which means no congestion was measured
+at that moment rather than that the data is missing. Worth checking during a
+busy hour before relying on it.
 
 ## If you ever want traffic tiles as well
 

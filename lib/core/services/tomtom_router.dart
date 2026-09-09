@@ -115,17 +115,39 @@ List<NavRoute> parseTomTomRoutes(String body) {
       // Guidance is optional; a route without it is still drivable.
       final guidance = raw['guidance'];
       if (guidance is Map) {
-        for (final i in (guidance['instructions'] as List? ?? const [])) {
-          if (i is! Map) continue;
+        final instructions = (guidance['instructions'] as List? ?? const [])
+            .whereType<Map>()
+            .toList();
+
+        for (var n = 0; n < instructions.length; n++) {
+          final i = instructions[n];
+
+          // routeOffsetInMeters is the distance from the *start of the
+          // route*, not the length of this step. Using it directly would
+          // tell a driver "turn left in 1851 m" when the turn is 1851 m
+          // from where the trip began and possibly right in front of them.
+          // The gap to the next instruction is the distance actually
+          // travelled on this one, which is what OSRM's steps mean too.
+          final here = (i['routeOffsetInMeters'] as num?)?.toDouble() ?? 0;
+          final next = n + 1 < instructions.length
+              ? (instructions[n + 1]['routeOffsetInMeters'] as num?)
+                    ?.toDouble()
+              : null;
+
           steps.add(
             NavStep(
-              road: (i['street'] as String?) ?? (i['roadNumbers'] is List
-                  ? ((i['roadNumbers'] as List).firstOrNull as String? ?? '')
-                  : ''),
+              road:
+                  (i['street'] as String?) ??
+                  (i['roadNumbers'] is List
+                      ? ((i['roadNumbers'] as List).firstOrNull as String? ??
+                            '')
+                      : ''),
               maneuver: _maneuverFrom(i['maneuver'] as String?),
               modifier: _modifierFrom(i['maneuver'] as String?),
-              distanceMeters:
-                  (i['routeOffsetInMeters'] as num?)?.toDouble() ?? 0,
+              distanceMeters: next == null ? 0 : (next - here).clamp(0, 1e9),
+              // TomTom phrases these itself, and names roads we would
+              // otherwise have to guess at.
+              text: i['message'] as String?,
             ),
           );
         }

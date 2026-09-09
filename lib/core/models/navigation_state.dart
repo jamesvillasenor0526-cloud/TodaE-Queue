@@ -79,11 +79,19 @@ class NavStep {
 
   final double distanceMeters;
 
+  /// A ready-made instruction from the router, when it supplies one.
+  ///
+  /// TomTom returns phrasing like "You have arrived at L. Beltran Street",
+  /// which names roads it knows about and we would otherwise have to guess
+  /// at. Preferred over the synthesised text when present.
+  final String? text;
+
   const NavStep({
     required this.road,
     required this.maneuver,
     required this.distanceMeters,
     this.modifier,
+    this.text,
   });
 
   /// A short spoken/displayed instruction.
@@ -91,6 +99,9 @@ class NavStep {
   /// Deliberately plain: a driver glancing at a phone needs the verb and the
   /// road, not a sentence.
   String get instruction {
+    final supplied = text?.trim();
+    if (supplied != null && supplied.isNotEmpty) return supplied;
+
     final where = road.isEmpty ? '' : ' onto $road';
     return switch (maneuver) {
       'depart' => road.isEmpty ? 'Start driving' : 'Head along $road',

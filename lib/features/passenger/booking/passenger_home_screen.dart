@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/models/trip_state.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:latlong2/latlong.dart';
@@ -249,14 +250,23 @@ class _HomeTabState extends State<_HomeTab> {
                   }
                   final docs = snapshot.data?.docs ?? [];
                   // A completed-and-paid trip has nothing left to act on.
+                  // Read the trip state machine, not the legacy fields. The
+                  // legacy `status` folds five states into 'accepted' and
+                  // can lag the authoritative tripStatus, which is how the
+                  // banner ends up disagreeing with the trip screen.
                   final active = docs.where((doc) {
-                    final d = doc.data() as Map<String, dynamic>;
-                    return !(d['status'] == 'completed' &&
-                        d['paymentStatus'] == 'paid');
+                    final t = TripState.fromMap(
+                      doc.id,
+                      doc.data() as Map<String, dynamic>,
+                    );
+                    return !(t.trip == TripStatus.tripCompleted &&
+                        t.payment == PaymentState.paymentConfirmed);
                   }).toList();
                   if (active.isEmpty) return const SizedBox.shrink();
                   final data = active.first.data() as Map<String, dynamic>;
-                  final awaitingPayment = data['status'] == 'completed';
+                  final awaitingPayment =
+                      TripState.fromMap(active.first.id, data).trip ==
+                      TripStatus.tripCompleted;
                   return GestureDetector(
                     onTap: () => Navigator.pushNamed(
                       context,
@@ -1349,7 +1359,8 @@ class _HistoryTabState extends State<_HistoryTab> {
           itemCount: bookings.length,
           itemBuilder: (context, index) {
             final data = bookings[index].data() as Map<String, dynamic>;
-            final status = data['status'] ?? 'assigned';
+            final status =
+                TripState.fromMap(bookings[index].id, data).trip.passengerLabel;
             return Card(
               margin: const EdgeInsets.only(bottom: 12),
               shape: RoundedRectangleBorder(

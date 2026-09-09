@@ -195,12 +195,29 @@ class DispatchService {
     final bookingSnap = await bookingRef.get();
     final bookingData = bookingSnap.data() ?? {};
 
+    // Both fields, always. Writing only the legacy `paymentStatus` left
+    // `paymentState` behind at UNPAID, and TripState prefers the new field —
+    // so a payment confirmed here showed as paid on the admin dashboard
+    // while the app still considered it unpaid and refused to let the trip
+    // start.
+    final trip = TripState.fromMap(bookingId, bookingData);
+
     await bookingRef.update({
       'paymentMethod': paymentMethod,
-      'paymentStatus': 'paid',
+      'paymentState': PaymentState.paymentConfirmed.wire,
+      'paymentStatus': PaymentState.paymentConfirmed.legacyPaymentStatus,
       'paidAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
       if (paymentMethod == 'cash') 'driverConfirmedPayment': true,
-      if (paymentMethod == 'cash') 'driverConfirmedAt': FieldValue.serverTimestamp(),
+      if (paymentMethod == 'cash')
+        'driverConfirmedAt': FieldValue.serverTimestamp(),
+      // Settled payment means the trip is ready to start — but not started.
+      // Mirrors what TripService.movePayment does, so both routes to a
+      // confirmed payment leave the record in the same shape.
+      if (trip.trip == TripStatus.driverArrived) ...{
+        'tripStatus': TripStatus.readyToStart.wire,
+        'status': TripStatus.readyToStart.legacyStatus,
+      },
     });
 
     final receiptNumber = await ReceiptService.instance.generateReceipt(

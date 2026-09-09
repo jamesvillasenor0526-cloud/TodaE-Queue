@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../../config/theme.dart';
 import '../../config/routes.dart';
 import '../../core/services/geocoding_service.dart';
+import '../../core/models/trip_state.dart';
 
 class TripDetailScreen extends StatefulWidget {
   final String bookingId;
@@ -45,32 +46,26 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     if (mounted) setState(() {});
   }
 
-  Color _statusColor(String status) {
-    return switch (status) {
-      'assigned' => AppTheme.primaryBlue,
-      'completed' => AppTheme.success,
-      'cancelled' => AppTheme.textMuted,
-      _ => AppTheme.textMuted,
-    };
-  }
+  // Driven by the trip state machine rather than the legacy string. The old
+  // mapping had no case for 'accepted' — the legacy value covering five
+  // states from acceptance through to the trip being under way — so every
+  // trip in that span displayed "Unknown Status". It also called 'assigned'
+  // "Trip In Progress", which is the opposite of the truth: an assigned
+  // trip is still waiting for a driver.
+  Color _statusColor(TripStatus status) => switch (status) {
+    TripStatus.tripCompleted => AppTheme.success,
+    TripStatus.cancelled => AppTheme.textMuted,
+    _ => AppTheme.primaryBlue,
+  };
 
-  IconData _statusIcon(String status) {
-    return switch (status) {
-      'assigned' => Icons.electric_rickshaw,
-      'completed' => Icons.check_circle,
-      'cancelled' => Icons.cancel,
-      _ => Icons.info,
-    };
-  }
+  IconData _statusIcon(TripStatus status) => switch (status) {
+    TripStatus.tripCompleted => Icons.check_circle,
+    TripStatus.cancelled => Icons.cancel,
+    TripStatus.tripInProgress => Icons.navigation,
+    _ => Icons.electric_rickshaw,
+  };
 
-  String _statusLabel(String status) {
-    return switch (status) {
-      'assigned' => 'Trip In Progress',
-      'completed' => 'Trip Completed',
-      'cancelled' => 'Trip Cancelled',
-      _ => 'Unknown Status',
-    };
-  }
+  String _statusLabel(TripStatus status) => status.passengerLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -96,7 +91,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
             _getPlaceNames(data);
           }
 
-          final status = data['status'] ?? 'unknown';
+          final status = TripState.fromMap(widget.bookingId, data).trip;
           final terminalName = data['terminalName'] ?? 'Unknown Terminal';
           final driverName = data['driverName'] ?? 'Unknown Driver';
           final driverId = data['driverId'] ?? '';
@@ -318,19 +313,29 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                         ),
                       ],
                       // Payment status
-                      if (data['paymentStatus'] != null) ...[
+                      if (data['paymentStatus'] != null ||
+                          data['paymentState'] != null) ...[
                         const Divider(height: 1, indent: 16, endIndent: 16),
-                        _DetailTile(
-                          icon: data['paymentStatus'] == 'paid'
-                              ? Icons.check_circle
-                              : Icons.pending,
-                          title: 'Payment Status',
-                          value: data['paymentStatus'] == 'paid'
-                              ? '✅ Paid'
-                              : '⏳ Pending',
-                          valueColor: data['paymentStatus'] == 'paid'
-                              ? AppTheme.success
-                              : AppTheme.warning,
+                        // From the payment state machine, which also
+                        // distinguishes submitted and rejected — states the
+                        // legacy paid/pending pair simply cannot express.
+                        Builder(
+                          builder: (context) {
+                            final payment = TripState.fromMap(
+                              widget.bookingId,
+                              data,
+                            ).payment;
+                            final paid =
+                                payment == PaymentState.paymentConfirmed;
+                            return _DetailTile(
+                              icon: paid ? Icons.check_circle : Icons.pending,
+                              title: 'Payment Status',
+                              value: payment.passengerLabel,
+                              valueColor: paid
+                                  ? AppTheme.success
+                                  : AppTheme.warning,
+                            );
+                          },
                         ),
                       ],
                       const Divider(height: 1, indent: 16, endIndent: 16),
@@ -351,7 +356,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                       _DetailTile(
                         icon: Icons.info_outline,
                         title: 'Status',
-                        value: status.toUpperCase(),
+                        value: status.passengerLabel,
                         valueColor: _statusColor(status),
                       ),
                     ],
@@ -360,7 +365,10 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                 const SizedBox(height: 24),
 
                 // Track button for active trips
-                if (status == 'assigned' && widget.userRole == 'passenger')
+                // Any trip that has not finished is trackable. Keying off
+                // the legacy 'assigned' hid this button for accepted and
+                // in-progress trips — exactly when tracking is useful.
+                if (!status.isTerminal && widget.userRole == 'passenger')
                   ElevatedButton.icon(
                     onPressed: () => Navigator.pushNamed(
                       context,

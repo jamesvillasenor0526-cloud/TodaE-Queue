@@ -325,7 +325,12 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
             return const Center(child: Text('Booking not found.'));
           }
 
-          final status = data['status'] ?? 'assigned';
+          // The authoritative trip state, not the legacy mirror: a
+          // completed trip drives the rating prompt, and reading the
+          // lagging field would either miss it or fire it early.
+          final tripCompleted =
+              TripState.fromMap(widget.bookingId, data).trip ==
+              TripStatus.tripCompleted;
           final driverId = data['driverId'] ?? '';
           final driverLat = data['driverLatitude'] as double?;
           final driverLng = data['driverLongitude'] as double?;
@@ -334,12 +339,11 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
               ? LatLng(driverLat, driverLng)
               : null;
 
-          // Add this after driverPosition:
-          if (driverPosition != null) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              _mapController.move(driverPosition, 16);
-            });
-          }
+          // The map deliberately isn't re-centred on every build. It used to
+          // be, which snapped the camera onto the driver at zoom 16 several
+          // times a second and fought the route layer's attempt to frame the
+          // whole journey — the passenger could never see where they were
+          // going. The recentre button below still does it on demand.
 
           String estimatedArrival = 'Calculating...';
           if (hasDriverLocation && data['pickupLatitude'] != null) {
@@ -361,7 +365,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
             }
           }
 
-          if (status == 'completed' && !_ratingShown) {
+          if (tripCompleted && !_ratingShown) {
             _showRatingDialog(context, driverId);
           }
 
@@ -506,7 +510,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                         fontSize: 13,
                       ),
                     ),
-                    if (status != 'completed' && hasDriverLocation) ...[
+                    if (!tripCompleted && hasDriverLocation) ...[
                       const SizedBox(height: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(
@@ -738,7 +742,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                   ],
                 ),
               ),
-              if (status == 'completed')
+              if (tripCompleted)
                 Padding(
                   padding: const EdgeInsets.all(16),
                   child: ElevatedButton(
@@ -790,7 +794,15 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      if (status != 'accepted')
+                      // Offered exactly when the state machine allows it,
+                      // rather than guessing from the legacy field — which
+                      // lumps five states together and so hid the button
+                      // for most of the window a passenger may cancel in.
+                      if (canTransitionTrip(
+                        TripState.fromMap(widget.bookingId, data).trip,
+                        TripStatus.cancelled,
+                        TripRole.passenger,
+                      ))
                         OutlinedButton.icon(
                           onPressed: () => _cancelTrip(context, data),
                           icon: const Icon(

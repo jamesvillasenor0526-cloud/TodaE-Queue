@@ -1064,8 +1064,14 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
                               final distance =
                                   bookingData?['distance'] as num? ?? 0;
                               final fare = bookingData?['fare'] as num? ?? 0;
+                              // The authoritative payment state, not the
+                              // legacy mirror it can drift from.
                               final paymentStatus =
-                                  bookingData?['paymentStatus'] ?? 'pending';
+                                  TripState.fromMap('', bookingData ?? const {})
+                                          .payment ==
+                                      PaymentState.paymentConfirmed
+                                  ? 'paid'
+                                  : 'pending';
                               final paymentMethod =
                                   bookingData?['paymentMethod'] ?? 'cash';
 
@@ -2248,8 +2254,9 @@ class _DriverHistoryTabState extends State<_DriverHistoryTab> {
           itemCount: entries.length,
           itemBuilder: (context, index) {
             final data = entries[index].data() as Map<String, dynamic>;
-            final status = data['status'] ?? 'completed';
-            final isCancelled = status == 'cancelled';
+            final tripStatus = TripState.fromMap(entries[index].id, data).trip;
+            final isCancelled = tripStatus == TripStatus.cancelled;
+            final status = tripStatus.driverLabel;
 
             final checkedInAt = data['checkedInAt'] as Timestamp?;
             final completedAt = data['completedAt'] as Timestamp?;
@@ -2384,7 +2391,10 @@ class _DriverHistoryTabState extends State<_DriverHistoryTab> {
 
                               final fare = bookingData['fare'] as num?;
                               final paymentStatus =
-                                  bookingData['paymentStatus'] ?? 'pending';
+                                  TripState.fromMap('', bookingData).payment ==
+                                      PaymentState.paymentConfirmed
+                                  ? 'paid'
+                                  : 'pending';
                               final paymentMethod =
                                   bookingData['paymentMethod'] as String?;
                               final isPaid = paymentStatus == 'paid';

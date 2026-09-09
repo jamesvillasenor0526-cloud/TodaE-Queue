@@ -288,24 +288,45 @@ double incidentDelaySeconds(ReportType type) => switch (type) {
   ReportType.trafficClear => 0,
 };
 
+/// An incident this close to the driver is level with them, not ahead.
+///
+/// Something you are already alongside cannot be avoided by rerouting, and
+/// counting it would penalise every possible route by the same amount —
+/// which tells the driver nothing and makes "ahead" a lie.
+const double kAlreadyPassedMeters = 80;
+
 /// Reports that lie on [route].
+///
+/// When [from] is given, only what is still **ahead** of that position
+/// counts. Without it, an accident at the driver's own location lands on
+/// every alternative equally, so no route can ever look better than
+/// another and the avoidance is inert.
 List<RoadReport> incidentsOn(
   NavRoute route,
   Iterable<RoadReport> reports, {
   required DateTime now,
   double thresholdMeters = kIncidentOnRouteMeters,
+  LatLng? from,
 }) {
   if (route.points.length < 2) return const [];
+
+  // Distance still to run from the driver. An incident is ahead when less
+  // of the route remains after it than after the driver.
+  final driverRemaining = from == null ? null : remainingMeters(route, from);
+
   return [
     // statusAt(now), not status: the latter reads the wall clock, which
     // would judge a report against a different instant from the liveness
-    // check on the line above.
+    // check beside it.
     for (final r in reports)
       if (r.isLive(now) && r.statusAt(now).isTrusted)
         if ((nearestOnWay(route.points, r.location)?.distanceMeters ??
                 double.infinity) <=
             thresholdMeters)
-          r,
+          if (driverRemaining == null ||
+              driverRemaining - remainingMeters(route, r.location) >
+                  kAlreadyPassedMeters)
+            r,
   ];
 }
 
@@ -314,8 +335,9 @@ RouteScore scoreRoute(
   NavRoute route,
   Iterable<RoadReport> reports, {
   required DateTime now,
+  LatLng? from,
 }) {
-  final on = incidentsOn(route, reports, now: now);
+  final on = incidentsOn(route, reports, now: now, from: from);
   var penalty = 0.0;
   for (final r in on) {
     // A corroborated report is trusted more, up to double weight — but a

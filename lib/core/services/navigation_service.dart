@@ -211,7 +211,7 @@ class NavigationService {
     final reports = await _nearbyReports(from);
     final now = DateTime.now();
     final scored = [
-      for (final r in routes) scoreRoute(r, reports, now: now),
+      for (final r in routes) scoreRoute(r, reports, now: now, from: from),
     ];
     final choices = buildChoices(scored);
     if (choices == null) return null;
@@ -281,7 +281,8 @@ class NavigationService {
     final reports = await _nearbyReports(position);
     // Re-score what is being driven against the conditions reported since it
     // was chosen — this is how a new incident reaches an in-progress trip.
-    final rescoredCurrent = scoreRoute(current.route, reports, now: now);
+    final rescoredCurrent =
+        scoreRoute(current.route, reports, now: now, from: position);
 
     final blocker = rescoredCurrent.incidentsOnRoute
         .where((r) => r.type == ReportType.roadClosure)
@@ -295,7 +296,7 @@ class NavigationService {
     if (candidates.isEmpty) return RerouteReason.none;
 
     final scored = [
-      for (final r in candidates) scoreRoute(r, reports, now: now),
+      for (final r in candidates) scoreRoute(r, reports, now: now, from: position),
     ];
     final choices = buildChoices(scored);
     if (choices == null) return RerouteReason.none;

@@ -157,6 +157,134 @@ void main() {
     });
   });
 
+  group('only what is ahead counts', () {
+    // The route runs west → east. The driver sits in the middle.
+    final start = _route().points.first;
+    final middle = _onRoute;
+    final end = _route().points.last;
+    final behind = LatLng(14.9540, 120.9030); // west of the driver
+    final aheadOfDriver = LatLng(14.9540, 120.9090); // east of the driver
+
+    test('an incident further along the route is counted', () {
+      final found = incidentsOn(
+        _route(),
+        [_report(at: aheadOfDriver)],
+        now: now,
+        from: middle,
+      );
+      expect(found, hasLength(1));
+    });
+
+    test('an incident already passed is not', () {
+      final found = incidentsOn(
+        _route(),
+        [_report(at: behind)],
+        now: now,
+        from: middle,
+      );
+      expect(found, isEmpty);
+    });
+
+    test('an incident level with the driver is not counted', () {
+      // You cannot reroute around something you are already alongside, and
+      // counting it penalises every alternative by the same amount — which
+      // is exactly what made a reported accident unavoidable.
+      final found = incidentsOn(
+        _route(),
+        [_report(at: middle)],
+        now: now,
+        from: middle,
+      );
+      expect(found, isEmpty);
+    });
+
+    test('without a position, the whole route is considered', () {
+      // Used when planning a leg before the driver has started it.
+      expect(
+        incidentsOn(_route(), [_report(at: behind)], now: now),
+        hasLength(1),
+      );
+    });
+
+    test('at the start of the route everything is still ahead', () {
+      final found = incidentsOn(
+        _route(),
+        [_report(at: behind), _report(id: 'b', at: aheadOfDriver)],
+        now: now,
+        from: start,
+      );
+      expect(found, hasLength(2));
+    });
+
+    test('at the end of the route nothing is ahead', () {
+      final found = incidentsOn(
+        _route(),
+        [_report(at: behind), _report(id: 'b', at: aheadOfDriver)],
+        now: now,
+        from: end,
+      );
+      expect(found, isEmpty);
+    });
+
+    test('a passed incident stops penalising the route', () {
+      final ahead = scoreRoute(
+        _route(),
+        [_report(at: aheadOfDriver)],
+        now: now,
+        from: middle,
+      );
+      final passed = scoreRoute(
+        _route(),
+        [_report(at: behind)],
+        now: now,
+        from: middle,
+      );
+
+      expect(ahead.penaltySeconds, greaterThan(0));
+      expect(passed.penaltySeconds, 0);
+      expect(passed.isEstimate, isFalse);
+    });
+
+    test('a closure behind the driver no longer blocks the route', () {
+      final score = scoreRoute(
+        _route(),
+        [_report(type: ReportType.roadClosure, at: behind)],
+        now: now,
+        from: middle,
+      );
+      expect(score.isBlocked, isFalse);
+    });
+
+    test('a closure ahead still does', () {
+      final score = scoreRoute(
+        _route(),
+        [_report(type: ReportType.roadClosure, at: aheadOfDriver)],
+        now: now,
+        from: middle,
+      );
+      expect(score.isBlocked, isTrue);
+    });
+
+    test('a clean route can now beat one with an incident ahead', () {
+      // The point of the whole exercise. While incidents at the driver's own
+      // position counted, every candidate carried the same penalty and no
+      // route could ever look better.
+      final blocked = scoreRoute(
+        _route(durationSeconds: 600),
+        [_report(type: ReportType.accident, at: aheadOfDriver)],
+        now: now,
+        from: middle,
+      );
+      final clean = scoreRoute(
+        _route(durationSeconds: 700),
+        const [],
+        now: now,
+        from: middle,
+      );
+      expect(chooseBest([blocked, clean]), clean);
+    });
+  });
+
   group('route scoring', () {
     test('a clear route carries no penalty and is not an estimate', () {
       final score = scoreRoute(_route(), const [], now: now);

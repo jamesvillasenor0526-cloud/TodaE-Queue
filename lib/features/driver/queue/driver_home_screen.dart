@@ -22,6 +22,7 @@ import '../../../widgets/shimmer_loading.dart';
 import '../../../widgets/state_views.dart';
 import 'widgets/trip_action_panel.dart';
 import '../../../core/models/trip_state.dart';
+import '../../../core/models/navigation_state.dart';
 import '../../../core/services/trip_service.dart';
 import '../../../core/models/road_report.dart';
 import '../../shared/reports/report_map_layer.dart';
@@ -1655,6 +1656,20 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
         // Save driver point for recenter
         _lastDriverPoint = driverPoint;
 
+        // Which end of the trip to emphasise. This follows the trip state
+        // rather than only the manual Go to Pickup / Go to Destination
+        // toggle: once the passenger is aboard, the destination is what the
+        // driver is heading for, and drawing it as a faint grey dot while
+        // the already-visited pickup stays big and orange makes the route
+        // look like it stops short of anywhere.
+        final navPhase = NavigationPhase.forTrip(
+          TripState.fromMap(widget.bookingId ?? '', bookingData ?? const {})
+              .trip,
+        );
+        final showDestination =
+            widget.highlightDestination ||
+            navPhase == NavigationPhase.toDestination;
+
         return SizedBox(
           height: 200,
           child: Stack(
@@ -1665,7 +1680,7 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
                   mapController: _mapController,
                   options: MapOptions(
                     initialCenter:
-                        widget.highlightDestination && destinationPoint != null
+                        showDestination && destinationPoint != null
                         ? destinationPoint
                         : driverPoint,
                     initialZoom: widget.highlightDestination ? 14 : 15,
@@ -1683,7 +1698,7 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
                         controller: _mapController,
                         from: driverPoint,
                         to:
-                            widget.highlightDestination &&
+                            showDestination &&
                                 destinationPoint != null
                             ? destinationPoint
                             : pickupPoint,
@@ -1702,27 +1717,27 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
                         ),
                         Marker(
                           point: pickupPoint,
-                          width: widget.highlightDestination ? 30 : 45,
-                          height: widget.highlightDestination ? 30 : 45,
+                          width: showDestination ? 30 : 45,
+                          height: showDestination ? 30 : 45,
                           child: Icon(
                             Icons.flag,
-                            color: widget.highlightDestination
+                            color: showDestination
                                 ? Colors.grey.withValues(alpha: 0.4)
                                 : AppTheme.warning,
-                            size: widget.highlightDestination ? 20 : 35,
+                            size: showDestination ? 20 : 35,
                           ),
                         ),
                         if (destinationPoint != null)
                           Marker(
                             point: destinationPoint,
-                            width: widget.highlightDestination ? 45 : 30,
-                            height: widget.highlightDestination ? 45 : 30,
+                            width: showDestination ? 45 : 30,
+                            height: showDestination ? 45 : 30,
                             child: Icon(
                               Icons.location_on,
-                              color: widget.highlightDestination
+                              color: showDestination
                                   ? AppTheme.errorRed
                                   : Colors.grey.withValues(alpha: 0.4),
-                              size: widget.highlightDestination ? 35 : 20,
+                              size: showDestination ? 35 : 20,
                             ),
                           ),
                       ],

@@ -303,9 +303,16 @@ class RoadReport {
   }
 
   static double? _toDouble(dynamic v) {
-    if (v is double) return v;
+    // NaN and infinity are not values a coordinate can take, and they
+    // survive a null check — a NaN latitude would flow into a LatLng and
+    // out to the map. Rejected here so both apps agree on which reports
+    // have a usable location.
+    if (v is double) return v.isFinite ? v : null;
     if (v is int) return v.toDouble();
-    if (v is String) return double.tryParse(v);
+    if (v is String) {
+      final parsed = double.tryParse(v.trim());
+      return (parsed != null && parsed.isFinite) ? parsed : null;
+    }
     return null;
   }
 

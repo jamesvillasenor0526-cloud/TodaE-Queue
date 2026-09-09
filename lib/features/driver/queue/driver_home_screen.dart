@@ -1169,94 +1169,20 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
                                   ),
                                   const SizedBox(height: 12),
 
-                                  // Navigation buttons
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: OutlinedButton.icon(
-                                          onPressed: () {
-                                            setState(
-                                              () => _isHighlightingDestination =
-                                                  false,
-                                            );
-                                            ScaffoldMessenger.of(
-                                              context,
-                                            ).showSnackBar(
-                                              const SnackBar(
-                                                content: Text(
-                                                  '📍 Mini map now shows pickup location',
-                                                ),
-                                                duration: Duration(seconds: 1),
-                                              ),
-                                            );
-                                          },
-                                          icon: const Icon(
-                                            Icons.navigation,
-                                            size: 16,
-                                          ),
-                                          label: const Text(
-                                            'Go to Pickup',
-                                            style: TextStyle(fontSize: 11),
-                                          ),
-                                          style: OutlinedButton.styleFrom(
-                                            foregroundColor: AppTheme.warning,
-                                            side: BorderSide(
-                                              color: _isHighlightingDestination
-                                                  ? Colors.orange.withValues(
-                                                      alpha: 0.3,
-                                                    )
-                                                  : AppTheme.warning,
-                                              width: _isHighlightingDestination
-                                                  ? 1
-                                                  : 2,
-                                            ),
-                                          ),
-                                        ),
+                                  // One button, shown only once the driver
+                                  // has reached the passenger. Before that
+                                  // there is nothing to choose: the route is
+                                  // to the pickup. After the trip starts the
+                                  // destination is shown automatically.
+                                  if (data['bookingId'] != null)
+                                    _DestinationSwitch(
+                                      bookingId: data['bookingId'] as String,
+                                      showingDestination:
+                                          _isHighlightingDestination,
+                                      onChanged: (v) => setState(
+                                        () => _isHighlightingDestination = v,
                                       ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: OutlinedButton.icon(
-                                          onPressed: () {
-                                            setState(
-                                              () => _isHighlightingDestination =
-                                                  true,
-                                            );
-                                            ScaffoldMessenger.of(
-                                              context,
-                                            ).showSnackBar(
-                                              const SnackBar(
-                                                content: Text(
-                                                  '📍 Mini map now shows destination',
-                                                ),
-                                                duration: Duration(seconds: 1),
-                                              ),
-                                            );
-                                          },
-                                          icon: const Icon(
-                                            Icons.navigation,
-                                            size: 16,
-                                          ),
-                                          label: const Text(
-                                            'Go to Destination',
-                                            style: TextStyle(fontSize: 11),
-                                          ),
-                                          style: OutlinedButton.styleFrom(
-                                            foregroundColor: AppTheme.errorRed,
-                                            side: BorderSide(
-                                              color: _isHighlightingDestination
-                                                  ? AppTheme.errorRed
-                                                  : Colors.red.withValues(
-                                                      alpha: 0.3,
-                                                    ),
-                                              width: _isHighlightingDestination
-                                                  ? 2
-                                                  : 1,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
+                                    ),
 
                                   const SizedBox(height: 12),
 
@@ -4113,6 +4039,127 @@ class _AcceptedTripHeading extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+/// Switches the mini map from the pickup leg to the destination leg.
+///
+/// Replaces the old pair of "Go to Pickup" / "Go to Destination" toggles.
+/// Those were always both offered, which asked the driver to keep track of
+/// something the trip already knows: on the way to the passenger there is
+/// only one place to go, and once the trip is under way the destination is
+/// the only thing worth showing.
+///
+/// So this appears at exactly one moment — the driver has reached the
+/// passenger but the trip has not started — and lets them look ahead at the
+/// destination while they wait. It changes what the map draws and nothing
+/// else; the trip itself still only moves through TripService.
+class _DestinationSwitch extends StatelessWidget {
+  const _DestinationSwitch({
+    required this.bookingId,
+    required this.showingDestination,
+    required this.onChanged,
+  });
+
+  final String bookingId;
+  final bool showingDestination;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(bookingId)
+          .snapshots(),
+      builder: (context, snap) {
+        final data = snap.data?.data();
+        if (data == null) return const SizedBox.shrink();
+
+        final phase = NavigationPhase.forTrip(
+          TripState.fromMap(bookingId, data).trip,
+        );
+
+        // Under way: the destination is already what the map shows.
+        if (phase == NavigationPhase.toDestination) {
+          return const _MapLegNotice(
+            icon: Icons.flag,
+            text: 'Map is showing the route to the destination.',
+          );
+        }
+
+        // Still driving to the passenger — nothing to switch to yet.
+        if (phase != NavigationPhase.atPickup) {
+          // Clear a preview left over from an earlier leg, so the next trip
+          // does not start out drawing the wrong end of the journey.
+          if (showingDestination) {
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => onChanged(false),
+            );
+          }
+          return const _MapLegNotice(
+            icon: Icons.person_pin_circle,
+            text: 'Map is showing the route to the passenger.',
+          );
+        }
+
+        return SizedBox(
+          width: double.infinity,
+          height: 48,
+          child: OutlinedButton.icon(
+            onPressed: () => onChanged(!showingDestination),
+            icon: Icon(
+              showingDestination ? Icons.person_pin_circle : Icons.flag,
+              size: 18,
+            ),
+            label: Text(
+              showingDestination
+                  ? 'Show route to passenger'
+                  : 'Show route to destination',
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: showingDestination
+                  ? AppTheme.warning
+                  : AppTheme.errorRed,
+              side: BorderSide(
+                color: showingDestination
+                    ? AppTheme.warning
+                    : AppTheme.errorRed,
+                width: 2,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Says which leg the map is drawing, for the times there is no choice.
+class _MapLegNotice extends StatelessWidget {
+  const _MapLegNotice({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: AppTheme.textMuted),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
+          ),
+        ),
+      ],
     );
   }
 }

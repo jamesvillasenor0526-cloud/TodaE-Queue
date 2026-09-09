@@ -108,6 +108,53 @@ void main() {
       final rejected = _report(storedStatus: IncidentStatus.rejected);
       expect(incidentsOn(_route(), [rejected], now: now), isEmpty);
     });
+
+    test('judges reports against the given time, not the wall clock', () {
+      // A deliberately historic window: by the real clock this report is
+      // long expired, but relative to the instant being asked about it is
+      // live. Reading DateTime.now() anywhere in here makes this fail, and
+      // it fails every run rather than only after the fixtures happen to
+      // age past their expiry.
+      final past = DateTime(2020, 1, 1, 12);
+      final report = _report(
+        createdAt: past,
+        expiresAt: past.add(const Duration(hours: 1)),
+      );
+
+      expect(
+        incidentsOn(_route(), [report], now: past.add(const Duration(minutes: 5))),
+        hasLength(1),
+      );
+      expect(
+        incidentsOn(_route(), [report], now: past.add(const Duration(hours: 2))),
+        isEmpty,
+      );
+    });
+
+    test('scoring and blocking also honour the given time', () {
+      final past = DateTime(2020, 1, 1, 12);
+      final closure = _report(
+        type: ReportType.roadClosure,
+        createdAt: past,
+        expiresAt: past.add(const Duration(hours: 1)),
+      );
+
+      final during = scoreRoute(
+        _route(),
+        [closure],
+        now: past.add(const Duration(minutes: 5)),
+      );
+      expect(during.isBlocked, isTrue);
+      expect(during.penaltySeconds, greaterThan(0));
+
+      final after = scoreRoute(
+        _route(),
+        [closure],
+        now: past.add(const Duration(hours: 2)),
+      );
+      expect(after.isBlocked, isFalse);
+      expect(after.penaltySeconds, 0);
+    });
   });
 
   group('route scoring', () {

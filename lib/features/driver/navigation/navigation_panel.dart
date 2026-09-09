@@ -95,6 +95,40 @@ class _NavigationPanelState extends State<NavigationPanel> {
             distanceFilter: 10,
           ),
         ).listen((p) => _onFix(LatLng(p.latitude, p.longitude)));
+
+    // The stream only emits after the driver has moved [distanceFilter]
+    // metres, so a phone sitting still produces nothing at all — and a
+    // driver waiting at a terminal for a booking is exactly that. Without
+    // this seed the panel stays on "Getting your route…" indefinitely.
+    await _seedPosition();
+  }
+
+  /// Establishes a first position without waiting for movement.
+  ///
+  /// Tries the last known fix first because it returns instantly, then asks
+  /// for a fresh one; either is enough to start routing.
+  Future<void> _seedPosition() async {
+    if (_position != null) return;
+    try {
+      final cached = await Geolocator.getLastKnownPosition();
+      if (cached != null && mounted && _position == null) {
+        await _onFix(LatLng(cached.latitude, cached.longitude));
+      }
+    } catch (_) {
+      // No cached fix on this device yet; the live one below covers it.
+    }
+
+    try {
+      final fresh = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      ).timeout(const Duration(seconds: 12));
+      if (mounted) await _onFix(LatLng(fresh.latitude, fresh.longitude));
+    } catch (_) {
+      // Indoors or GPS denied. The panel keeps showing that it is still
+      // working on the route rather than claiming a false one.
+    }
   }
 
   Future<void> _onFix(LatLng position) async {

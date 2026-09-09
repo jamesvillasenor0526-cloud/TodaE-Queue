@@ -182,9 +182,12 @@ class RouteScore {
   bool get isEstimate => penaltySeconds > 0;
 
   /// A route the driver should not be sent down at all.
-  bool get isBlocked => incidentsOnRoute.any(
-    (r) => r.type == ReportType.roadClosure && r.status.isTrusted,
-  );
+  ///
+  /// No trust check here: [incidentsOn] already dropped anything expired or
+  /// dismissed, judged against the same instant. Re-checking would reach for
+  /// the wall clock and could disagree with the list it is filtering.
+  bool get isBlocked =>
+      incidentsOnRoute.any((r) => r.type == ReportType.roadClosure);
 }
 
 /// How close to the line a report has to be to count as "on this route".
@@ -219,8 +222,11 @@ List<RoadReport> incidentsOn(
 }) {
   if (route.points.length < 2) return const [];
   return [
+    // statusAt(now), not status: the latter reads the wall clock, which
+    // would judge a report against a different instant from the liveness
+    // check on the line above.
     for (final r in reports)
-      if (r.isLive(now) && r.status.isTrusted)
+      if (r.isLive(now) && r.statusAt(now).isTrusted)
         if ((nearestOnWay(route.points, r.location)?.distanceMeters ??
                 double.infinity) <=
             thresholdMeters)

@@ -379,6 +379,38 @@ void main() {
       expect(_report(cleared: true).statusAt(now), IncidentStatus.expired);
     });
 
+    test('an incident an admin confirmed can still be cleared', () {
+      // Confirming says it is real; clearing says it has ended, and it comes
+      // later. Checking the confirmation first left a confirmed incident
+      // with no way to be closed — the admin pressed Resolved on the
+      // dashboard, the write succeeded, and nothing moved.
+      expect(
+        _report(
+          storedStatus: IncidentStatus.confirmed,
+          cleared: true,
+        ).statusAt(now),
+        IncidentStatus.expired,
+      );
+    });
+
+    test('clearing does not undo a dismissal', () {
+      // Dismissing says the report was never real, and that judgement holds.
+      expect(
+        _report(
+          storedStatus: IncidentStatus.rejected,
+          cleared: true,
+        ).statusAt(now),
+        IncidentStatus.rejected,
+      );
+    });
+
+    test('a confirmed report stays confirmed until it is cleared', () {
+      expect(
+        _report(storedStatus: IncidentStatus.confirmed).statusAt(now),
+        IncidentStatus.confirmed,
+      );
+    });
+
     test('rejected and expired incidents are not trusted for routing', () {
       expect(IncidentStatus.rejected.isTrusted, isFalse);
       expect(IncidentStatus.expired.isTrusted, isFalse);

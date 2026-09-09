@@ -246,8 +246,14 @@ class RoadReport {
   /// that, corroboration promotes it.
   IncidentStatus statusAt(DateTime now) {
     final stored = storedStatus;
-    if (stored != null && stored.isAdminDecision) return stored;
+    // A dismissal says the report was never real. Nothing later changes that.
+    if (stored == IncidentStatus.rejected) return IncidentStatus.rejected;
+    // Clearing says the condition has ended, which is a later statement than
+    // confirming it was real. Checking the confirmation first meant a
+    // confirmed incident could never be closed: the admin pressed Resolved,
+    // the write succeeded, and the incident sat in Active regardless.
     if (cleared) return IncidentStatus.expired;
+    if (stored == IncidentStatus.confirmed) return IncidentStatus.confirmed;
     final until = expiresAt;
     if (until != null && !now.isBefore(until)) return IncidentStatus.expired;
     // Live traffic agreeing counts here, so something a measured feed can

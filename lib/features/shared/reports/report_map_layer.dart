@@ -162,6 +162,10 @@ class _TrafficOverlayState extends State<TrafficOverlay> {
                 ],
               ),
             ],
+
+            // Discrete incidents sit on top of the traffic shading as one
+            // marker each, however many people reported them.
+            _IncidentMarkers(reports: reports),
           ],
         );
       },
@@ -188,6 +192,263 @@ class _TrafficOverlayState extends State<TrafficOverlay> {
       if (!mounted || ways.isEmpty) return;
       setState(() => _ways = ways);
     });
+  }
+}
+
+/// One marker per incident, not per report.
+///
+/// Three drivers reporting the same accident must read as one accident that
+/// three people have seen — the grouping is what turns a pile of reports
+/// into information.
+class _IncidentMarkers extends StatelessWidget {
+  const _IncidentMarkers({required this.reports});
+  final List<RoadReport> reports;
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    // Traffic is already conveyed by the road shading, so only the discrete
+    // things get a pin — otherwise every jam gets a marker on top of the
+    // colour that already says the same thing.
+    final incidents = groupIncidents(
+      reports.where((r) => r.type.category == ReportCategory.incident),
+      now: now,
+    );
+
+    return MarkerLayer(
+      markers: [
+        for (final incident in incidents)
+          Marker(
+            point: incident.location,
+            width: 46,
+            height: 46,
+            child: _IncidentPin(
+              incident: incident,
+              now: now,
+              onTap: () => showIncidentSheet(context, incident),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _IncidentPin extends StatelessWidget {
+  const _IncidentPin({
+    required this.incident,
+    required this.now,
+    required this.onTap,
+  });
+
+  final Incident incident;
+  final DateTime now;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final count = incident.reportCount;
+    final status = incident.statusAt(now);
+
+    return Semantics(
+      button: true,
+      label: '${incident.type.label}, $count reports',
+      child: GestureDetector(
+        onTap: onTap,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: incident.type.color,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.white,
+                  // A confirmed incident is drawn more solidly than one
+                  // nobody has backed up yet.
+                  width: status == IncidentStatus.confirmed ? 3 : 2,
+                ),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black26,
+                    blurRadius: 4,
+                    offset: Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Icon(incident.type.icon, color: Colors.white, size: 19),
+            ),
+            if (count > 1)
+              Positioned(
+                top: 0,
+                right: 0,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(AppRadius.pill),
+                    border: Border.all(color: incident.type.color),
+                  ),
+                  child: Text(
+                    '$count',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: incident.type.color,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Details behind one incident marker.
+Future<void> showIncidentSheet(BuildContext context, Incident incident) {
+  return showModalBottomSheet<void>(
+    context: context,
+    useSafeArea: true,
+    isScrollControlled: true,
+    builder: (_) => _IncidentSheet(incident: incident),
+  );
+}
+
+class _IncidentSheet extends StatelessWidget {
+  const _IncidentSheet({required this.incident});
+  final Incident incident;
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final status = incident.statusAt(now);
+
+    return Padding(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: incident.type.color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                ),
+                child: Icon(incident.type.icon, color: incident.type.color),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      incident.type.label,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      incident.summary(now),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.sm,
+            children: [
+              _Chip(
+                icon: Icons.verified_outlined,
+                label: status.label,
+                colour: status == IncidentStatus.confirmed
+                    ? AppTheme.success
+                    : AppTheme.textMuted,
+              ),
+              _Chip(
+                icon: Icons.people_outline,
+                label: incident.reportCount == 1
+                    ? '1 report'
+                    : '${incident.reportCount} reports',
+                colour: AppTheme.textMuted,
+              ),
+              _Chip(
+                icon: Icons.place_outlined,
+                label:
+                    '${incident.location.latitude.toStringAsFixed(4)}, '
+                    '${incident.location.longitude.toStringAsFixed(4)}',
+                colour: AppTheme.textMuted,
+              ),
+            ],
+          ),
+          for (final note in incident.reports
+              .map((r) => r.note)
+              .whereType<String>()
+              .where((n) => n.isNotEmpty)) ...[
+            const SizedBox(height: AppSpacing.sm),
+            Text('“$note”', style: const TextStyle(fontSize: 13)),
+          ],
+          const SizedBox(height: AppSpacing.lg),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () {
+                Navigator.pop(context);
+                showConditionsSheet(context, incident.reports);
+              },
+              icon: const Icon(Icons.list_alt, size: 18),
+              label: const Text('See the reports'),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+        ],
+      ),
+    );
+  }
+}
+
+class _Chip extends StatelessWidget {
+  const _Chip({
+    required this.icon,
+    required this.label,
+    required this.colour,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color colour;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: colour.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: colour),
+          const SizedBox(width: 5),
+          Text(label, style: TextStyle(fontSize: 12, color: colour)),
+        ],
+      ),
+    );
   }
 }
 

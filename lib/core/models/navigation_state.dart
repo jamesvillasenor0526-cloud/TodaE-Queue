@@ -200,9 +200,13 @@ double incidentDelaySeconds(ReportType type) => switch (type) {
   ReportType.accident => 480,
   ReportType.flooding => 420,
   ReportType.trafficHeavy => 300,
+  ReportType.fallenTree => 300,
+  ReportType.construction => 180,
   ReportType.trafficModerate => 120,
   ReportType.breakdown => 120,
+  ReportType.checkpoint => 90,
   ReportType.hazard => 60,
+  ReportType.roadDamage => 45,
   ReportType.trafficClear => 0,
 };
 

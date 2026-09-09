@@ -21,7 +21,11 @@ enum ReportType {
   roadClosure('ROAD_CLOSURE', ReportCategory.incident),
   flooding('FLOODING', ReportCategory.incident),
   hazard('HAZARD', ReportCategory.incident),
-  breakdown('BREAKDOWN', ReportCategory.incident);
+  breakdown('BREAKDOWN', ReportCategory.incident),
+  construction('CONSTRUCTION', ReportCategory.incident),
+  roadDamage('ROAD_DAMAGE', ReportCategory.incident),
+  fallenTree('FALLEN_TREE', ReportCategory.incident),
+  checkpoint('CHECKPOINT', ReportCategory.incident);
 
   const ReportType(this.wire, this.category);
 
@@ -46,6 +50,10 @@ enum ReportType {
     ReportType.flooding => 'Flooding',
     ReportType.hazard => 'Road hazard',
     ReportType.breakdown => 'Vehicle breakdown',
+    ReportType.construction => 'Road construction',
+    ReportType.roadDamage => 'Road damage',
+    ReportType.fallenTree => 'Fallen tree',
+    ReportType.checkpoint => 'Checkpoint',
   };
 
   String get hint => switch (this) {
@@ -55,8 +63,12 @@ enum ReportType {
     ReportType.accident => 'Collision blocking the road',
     ReportType.roadClosure => 'Road is impassable',
     ReportType.flooding => 'Flooded and risky to cross',
-    ReportType.hazard => 'Debris, potholes, or similar',
+    ReportType.hazard => 'Debris or similar obstruction',
     ReportType.breakdown => 'Stalled vehicle in the way',
+    ReportType.construction => 'Roadworks slowing traffic',
+    ReportType.roadDamage => 'Potholes or a broken surface',
+    ReportType.fallenTree => 'Tree or branch blocking the road',
+    ReportType.checkpoint => 'Police or barangay checkpoint',
   };
 
   IconData get icon => switch (this) {
@@ -68,6 +80,10 @@ enum ReportType {
     ReportType.flooding => Icons.water,
     ReportType.hazard => Icons.warning_amber,
     ReportType.breakdown => Icons.build_circle_outlined,
+    ReportType.construction => Icons.construction,
+    ReportType.roadDamage => Icons.dangerous_outlined,
+    ReportType.fallenTree => Icons.park_outlined,
+    ReportType.checkpoint => Icons.local_police_outlined,
   };
 
   Color get color => switch (this) {
@@ -79,6 +95,10 @@ enum ReportType {
     ReportType.flooding => AppTheme.info,
     ReportType.hazard => AppTheme.warning,
     ReportType.breakdown => AppTheme.warning,
+    ReportType.construction => AppTheme.warning,
+    ReportType.roadDamage => AppTheme.warning,
+    ReportType.fallenTree => AppTheme.errorRed,
+    ReportType.checkpoint => AppTheme.info,
   };
 
   /// How bad this condition is for someone trying to get through, 0 (clear)
@@ -89,19 +109,34 @@ enum ReportType {
     ReportType.trafficHeavy => 1,
     ReportType.breakdown => 0.5,
     ReportType.hazard => 0.55,
+    ReportType.roadDamage => 0.45,
+    ReportType.checkpoint => 0.4,
+    ReportType.construction => 0.6,
     ReportType.flooding => 0.75,
+    ReportType.fallenTree => 0.85,
     ReportType.accident => 0.9,
     ReportType.roadClosure => 1,
   };
 
   /// How long a report stays live before it stops being shown.
   ///
-  /// Traffic changes minute to minute, so those expire quickly; an accident
-  /// or closure is worth trusting for longer. Expiry is evaluated on read,
-  /// so no scheduled cleanup job is required.
-  Duration get lifespan => switch (category) {
-    ReportCategory.traffic => const Duration(minutes: 30),
-    ReportCategory.incident => const Duration(hours: 3),
+  /// Set per type rather than per category, because the useful lifetime of
+  /// a report is really about how fast the thing it describes changes.
+  /// Traffic turns over in minutes; roadworks and a broken surface are still
+  /// there tomorrow. Expiry is evaluated on read, so nothing needs a
+  /// scheduled cleanup job.
+  Duration get lifespan => switch (this) {
+    ReportType.trafficHeavy ||
+    ReportType.trafficModerate ||
+    ReportType.trafficClear => const Duration(minutes: 30),
+    ReportType.breakdown => const Duration(hours: 2),
+    ReportType.accident || ReportType.hazard => const Duration(hours: 3),
+    ReportType.checkpoint => const Duration(hours: 4),
+    ReportType.roadClosure ||
+    ReportType.flooding ||
+    ReportType.fallenTree => const Duration(hours: 6),
+    ReportType.construction ||
+    ReportType.roadDamage => const Duration(hours: 24),
   };
 }
 

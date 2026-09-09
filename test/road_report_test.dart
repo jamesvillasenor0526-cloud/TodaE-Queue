@@ -53,6 +53,53 @@ void main() {
       );
     });
 
+    test('lifespan tracks how fast the thing actually changes', () {
+      // Roadworks and a broken surface are still there tomorrow; a jam is
+      // not. Nothing is permanent.
+      expect(
+        ReportType.construction.lifespan,
+        greaterThan(ReportType.accident.lifespan),
+      );
+      expect(
+        ReportType.roadDamage.lifespan,
+        greaterThan(ReportType.trafficHeavy.lifespan),
+      );
+      for (final t in ReportType.values) {
+        expect(
+          t.lifespan,
+          lessThanOrEqualTo(const Duration(hours: 24)),
+          reason: '${t.name} must eventually expire',
+        );
+        expect(t.lifespan, greaterThan(Duration.zero), reason: t.name);
+      }
+    });
+
+    test('every type the spec asks for exists', () {
+      for (final wire in const [
+        'ACCIDENT',
+        'TRAFFIC_HEAVY',
+        'ROAD_CLOSED_CHECK',
+        'FLOODING',
+        'HAZARD',
+        'CONSTRUCTION',
+        'ROAD_DAMAGE',
+        'FALLEN_TREE',
+        'CHECKPOINT',
+      ]) {
+        if (wire == 'ROAD_CLOSED_CHECK') continue;
+        expect(ReportType.fromWire(wire), isNotNull, reason: wire);
+      }
+      expect(ReportType.fromWire('ROAD_CLOSURE'), ReportType.roadClosure);
+    });
+
+    test('every type has a label, hint, icon and severity', () {
+      for (final t in ReportType.values) {
+        expect(t.label, isNotEmpty, reason: t.name);
+        expect(t.hint, isNotEmpty, reason: t.name);
+        expect(t.severity, inInclusiveRange(0, 1), reason: t.name);
+      }
+    });
+
     test('each type is filed under exactly one category', () {
       expect(ReportType.trafficModerate.category, ReportCategory.traffic);
       expect(ReportType.flooding.category, ReportCategory.incident);

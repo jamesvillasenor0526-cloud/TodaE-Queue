@@ -14,6 +14,7 @@ import 'widgets/driver_eta_card.dart';
 import '../../../core/models/trip_state.dart';
 import '../../../core/services/trip_service.dart';
 import '../../shared/reports/report_map_layer.dart';
+import '../../shared/navigation/trip_route_layer.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class TripTrackingScreen extends StatefulWidget {
@@ -599,11 +600,22 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                       ),
                       children: [
                         AppTileLayer(),
-                        MarkerLayer(markers: markers),
                         // Traffic and incidents matter most while you are
                         // actually on the road, so the overlay follows the
                         // trip too.
                         TrafficOverlay(origin: mapCenter, radiusKm: 3),
+                        // The driver's actual route, from the same record
+                        // they publish it to. The passenger had no route
+                        // line at all before this — only markers — so a
+                        // reroute was invisible to them.
+                        if (driverPosition != null)
+                          TripRouteLayer(
+                            bookingId: widget.bookingId,
+                            controller: _mapController,
+                            from: driverPosition,
+                            to: mapCenter,
+                          ),
+                        MarkerLayer(markers: markers),
                       ],
                     ),
                     // Recenter button

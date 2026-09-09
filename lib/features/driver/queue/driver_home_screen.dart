@@ -11,7 +11,6 @@ import '../../../config/theme.dart';
 import '../../../core/services/geofence_service.dart';
 import '../../../core/services/dispatch_service.dart';
 import '../../../core/services/notification_service.dart';
-import '../../../core/services/routing_service.dart';
 import '../../../core/utils/date_formatter.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -28,6 +27,7 @@ import '../../../core/models/road_report.dart';
 import '../../shared/reports/report_map_layer.dart';
 import '../../shared/reports/report_sheet.dart';
 import '../navigation/navigation_panel.dart';
+import '../../shared/navigation/trip_route_layer.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   const DriverHomeScreen({super.key});
@@ -1672,21 +1672,22 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
                   ),
                   children: [
                     AppTileLayer(),
-                    // Show route based on highlight mode
-                    if (widget.highlightDestination &&
-                        destinationPoint != null &&
-                        driverLat != null) ...[
-                      _RoutingPolyline(
-                        driverPoint: driverPoint,
-                        pickupPoint: destinationPoint,
-                      ),
-                    ] else if (driverLat != null && driverLng != null) ...[
-                      _RoutingPolyline(
-                        driverPoint: driverPoint,
-                        pickupPoint: pickupPoint,
-                      ),
-                    ],
                     TrafficOverlay(origin: driverPoint, radiusKm: 3),
+                    // The route the driver is actually following, read from
+                    // the shared record — so picking an alternative or being
+                    // rerouted moves this line too. Drawn over the traffic
+                    // colour, which sits on the same roads.
+                    if (widget.bookingId != null)
+                      TripRouteLayer(
+                        bookingId: widget.bookingId!,
+                        controller: _mapController,
+                        from: driverPoint,
+                        to:
+                            widget.highlightDestination &&
+                                destinationPoint != null
+                            ? destinationPoint
+                            : pickupPoint,
+                      ),
                     MarkerLayer(
                       markers: [
                         Marker(
@@ -1755,59 +1756,6 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
 
 // ─── Routing Polyline ─────────────────────────────────────────────────────────
 
-class _RoutingPolyline extends StatefulWidget {
-  final LatLng driverPoint;
-  final LatLng pickupPoint;
-  const _RoutingPolyline({
-    required this.driverPoint,
-    required this.pickupPoint,
-  });
-
-  @override
-  State<_RoutingPolyline> createState() => _RoutingPolylineState();
-}
-
-class _RoutingPolylineState extends State<_RoutingPolyline> {
-  List<LatLng>? _routePoints;
-
-  @override
-  void initState() {
-    super.initState();
-    _fetchRoute();
-  }
-
-  @override
-  void didUpdateWidget(covariant _RoutingPolyline oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.driverPoint != widget.driverPoint ||
-        oldWidget.pickupPoint != widget.pickupPoint) {
-      _fetchRoute();
-    }
-  }
-
-  Future<void> _fetchRoute() async {
-    try {
-      final points = await RoutingService.instance.getRoute(
-        widget.driverPoint,
-        widget.pickupPoint,
-      );
-      if (mounted) setState(() => _routePoints = points);
-    } catch (e) {
-      debugPrint('OSRM routing error: $e');
-      if (mounted) setState(() => _routePoints = null);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final points = _routePoints ?? [widget.driverPoint, widget.pickupPoint];
-    return PolylineLayer(
-      polylines: [
-        Polyline(points: points, color: AppTheme.primaryBlue, strokeWidth: 3),
-      ],
-    );
-  }
-}
 
 // ─── Driver Map Tab ───────────────────────────────────────────────────────────
 

@@ -6,6 +6,7 @@ library;
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:toda_equeue_plus/core/models/road_report.dart';
 import 'package:toda_equeue_plus/core/services/traffic_incident_service.dart';
 
@@ -108,6 +109,107 @@ void main() {
       for (final c in [0, 2, 3, 4, 5, 10, 99, -1]) {
         expect(reportTypeForTomTomCategory(c), ReportType.hazard, reason: '$c');
       }
+    });
+  });
+
+  group('corroborating a driver report', () {
+    final incidents = parseTomTomIncidents(body);
+    // A point taken from one of the jams TomTom actually reported.
+    final onAJam = incidents
+        .firstWhere((i) => i.type == ReportType.trafficHeavy)
+        .points
+        .first;
+
+    test('agrees when a driver reports the jam it can see', () {
+      expect(
+        liveTrafficAgreesWith(ReportType.trafficHeavy, onAJam, incidents),
+        isTrue,
+      );
+    });
+
+    test('does not agree about somewhere far away', () {
+      // Manila, well outside the captured box.
+      expect(
+        liveTrafficAgreesWith(
+          ReportType.trafficHeavy,
+          const LatLng(14.5995, 120.9842),
+          incidents,
+        ),
+        isFalse,
+      );
+    });
+
+    test('a measured jam backs up the things that cause one', () {
+      // TomTom reports almost everything as a jam, so a jam where a driver
+      // reports an accident is consistent, not contradictory.
+      for (final reported in [
+        ReportType.accident,
+        ReportType.roadClosure,
+        ReportType.breakdown,
+        ReportType.trafficModerate,
+      ]) {
+        expect(
+          liveTrafficAgreesWith(reported, onAJam, incidents),
+          isTrue,
+          reason: reported.name,
+        );
+      }
+    });
+
+    test('a jam does not vouch for an unrelated report', () {
+      // Nothing about slow traffic says the road is flooded.
+      for (final unrelated in [
+        ReportType.flooding,
+        ReportType.fallenTree,
+        ReportType.checkpoint,
+      ]) {
+        expect(
+          liveTrafficAgreesWith(unrelated, onAJam, incidents),
+          isFalse,
+          reason: unrelated.name,
+        );
+      }
+    });
+
+    test('silence is never treated as disagreement', () {
+      // The whole point of the reports is what the feed cannot see. With no
+      // incidents at all the answer is "not corroborated", which must leave
+      // the report standing rather than counting against it.
+      expect(
+        liveTrafficAgreesWith(ReportType.accident, onAJam, const []),
+        isFalse,
+      );
+    });
+
+    test('corroboration lifts a lone report out of unverified', () {
+      final alone = RoadReport(
+        id: 'r',
+        type: ReportType.trafficHeavy,
+        location: onAJam,
+        reportedBy: 'uid',
+        reporterName: 'Test',
+        reporterRole: 'driver',
+        createdAt: DateTime(2026, 9, 9, 12),
+        expiresAt: DateTime(2026, 9, 9, 13),
+      );
+      final backed = RoadReport(
+        id: 'r',
+        type: ReportType.trafficHeavy,
+        location: onAJam,
+        reportedBy: 'uid',
+        reporterName: 'Test',
+        reporterRole: 'driver',
+        createdAt: DateTime(2026, 9, 9, 12),
+        expiresAt: DateTime(2026, 9, 9, 13),
+        corroboratedByTraffic: true,
+      );
+      final now = DateTime(2026, 9, 9, 12, 5);
+
+      expect(alone.statusAt(now), IncidentStatus.reported);
+      expect(backed.statusAt(now), IncidentStatus.verifying);
+      // But it is still one person on the road, not two.
+      expect(backed.reportCount, 1);
+      expect(backed.corroborationCount, 1);
     });
   });
 

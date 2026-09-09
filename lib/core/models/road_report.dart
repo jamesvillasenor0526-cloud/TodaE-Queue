@@ -202,6 +202,14 @@ class RoadReport {
   /// admin has ruled on it — otherwise [status] derives the value.
   final IncidentStatus? storedStatus;
 
+  /// Set when live traffic data independently showed the same thing at the
+  /// same place as this was filed.
+  ///
+  /// Counts as one corroboration. It is never set to false as a judgement —
+  /// a measured feed lagging, or not covering a barangay street, says
+  /// nothing about whether the driver is right.
+  final bool corroboratedByTraffic;
+
   const RoadReport({
     required this.id,
     required this.type,
@@ -218,10 +226,18 @@ class RoadReport {
     this.expiresAt,
     this.cleared = false,
     this.storedStatus,
+    this.corroboratedByTraffic = false,
   });
 
   /// How many people have reported this, counting the original reporter.
   int get reportCount => confirmations + 1;
+
+  /// Confirmations plus independent agreement from live traffic data.
+  ///
+  /// Kept separate from [reportCount], which counts people: a measured feed
+  /// agreeing is worth trusting, but it is not another person on the road.
+  int get corroborationCount =>
+      confirmations + (corroboratedByTraffic ? 1 : 0);
 
   /// The status to act on.
   ///
@@ -234,8 +250,10 @@ class RoadReport {
     if (cleared) return IncidentStatus.expired;
     final until = expiresAt;
     if (until != null && !now.isBefore(until)) return IncidentStatus.expired;
-    if (confirmations >= 3) return IncidentStatus.confirmed;
-    if (confirmations >= 1) return IncidentStatus.verifying;
+    // Live traffic agreeing counts here, so something a measured feed can
+    // already see does not sit unverified waiting for three more drivers.
+    if (corroborationCount >= 3) return IncidentStatus.confirmed;
+    if (corroborationCount >= 1) return IncidentStatus.verifying;
     return IncidentStatus.reported;
   }
 
@@ -324,6 +342,7 @@ class RoadReport {
       expiresAt: conv(data['expiresAt']),
       cleared: data['cleared'] as bool? ?? false,
       storedStatus: IncidentStatus.fromWire(data['status'] as String?),
+      corroboratedByTraffic: data['corroboratedByTraffic'] as bool? ?? false,
     );
   }
 }

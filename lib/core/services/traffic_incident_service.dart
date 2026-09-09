@@ -80,6 +80,52 @@ class TrafficIncident {
   }
 }
 
+/// How close a measured incident must be to back up a report.
+///
+/// Generous, because TomTom places a jam along a whole stretch of road while
+/// a driver reports the point they are sitting at.
+const double kCorroborationMeters = 250;
+
+/// Whether TomTom independently sees what a driver just reported.
+///
+/// Only ever used to *support* a report, never to contradict one. TomTom
+/// lags, covers roads unevenly, and knows nothing about a barangay street —
+/// so its silence is not evidence that a driver is wrong, and treating it
+/// that way would suppress exactly the local knowledge this app exists to
+/// collect.
+///
+/// Types must match, with one deliberate exception: TomTom reports almost
+/// everything as a jam, so a measured jam also backs up the slower-moving
+/// incident types, which do cause jams.
+bool liveTrafficAgreesWith(
+  ReportType reported,
+  LatLng where,
+  Iterable<TrafficIncident> incidents, {
+  double withinMeters = kCorroborationMeters,
+}) {
+  const distance = Distance();
+
+  for (final incident in incidents) {
+    if (!_typesAgree(reported, incident.type)) continue;
+    for (final p in incident.points) {
+      if (distance.as(LengthUnit.Meter, where, p) <= withinMeters) return true;
+    }
+  }
+  return false;
+}
+
+bool _typesAgree(ReportType reported, ReportType measured) {
+  if (reported == measured) return true;
+  // A measured jam is consistent with the things that cause one.
+  if (measured == ReportType.trafficHeavy) {
+    return reported == ReportType.trafficModerate ||
+        reported == ReportType.accident ||
+        reported == ReportType.roadClosure ||
+        reported == ReportType.breakdown;
+  }
+  return false;
+}
+
 /// TomTom's iconCategory, mapped onto the app's report vocabulary.
 ///
 /// The two sets line up closely, which is what lets a TomTom incident and a

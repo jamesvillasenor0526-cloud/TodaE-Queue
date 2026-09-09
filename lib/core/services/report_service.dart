@@ -8,6 +8,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../models/road_report.dart';
 import 'cloudinary_service.dart';
+import 'traffic_incident_service.dart';
 
 /// Raised when a report can't be submitted. The message is safe to show.
 class ReportException implements Exception {
@@ -185,6 +186,17 @@ class ReportService {
       photoUrl = await CloudinaryService.instance.uploadImage(photo, 'reports');
     }
 
+    // Ask the live traffic feed whether it can see the same thing. Only ever
+    // used to support the report — a feed that lags, or does not cover a
+    // barangay street, saying nothing is not evidence the driver is wrong.
+    var corroborated = false;
+    try {
+      final measured = await TrafficIncidentService.instance.near(location);
+      corroborated = liveTrafficAgreesWith(type, location, measured);
+    } catch (_) {
+      // Corroboration is a bonus, never a gate on filing a report.
+    }
+
     final now = DateTime.now();
     final trimmed = note?.trim();
     try {
@@ -202,6 +214,10 @@ class ReportService {
         'tripId': tripId,
         'confirmations': 0,
         'confirmedBy': <String>[],
+        // Independent agreement from measured traffic at the moment of
+        // filing. Counts as one corroboration; never written as false to
+        // mean "contradicted", only "not seen".
+        'corroboratedByTraffic': corroborated,
         'cleared': false,
         // Starts unverified: corroboration or an admin promotes it.
         'status': IncidentStatus.reported.wire,

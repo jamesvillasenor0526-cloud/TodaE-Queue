@@ -155,6 +155,27 @@ class NavRoute {
   bool get isRealRoute => source != 'straight-line';
 
   NavStep? get nextStep => steps.isEmpty ? null : steps.first;
+
+  /// Identifies a route by the road it describes rather than by object
+  /// identity.
+  ///
+  /// The candidates are re-fetched and rebuilt on every recalculation, so
+  /// two NavRoute instances describing the same road are never `identical`.
+  /// Comparing by reference made the UI mark the wrong option as active the
+  /// moment the choices refreshed — the header would say one route while the
+  /// radio showed the other.
+  String get key {
+    if (points.isEmpty) return 'empty';
+    final first = points.first, last = points.last;
+    return '${points.length}'
+        ':${first.latitude.toStringAsFixed(5)},'
+        '${first.longitude.toStringAsFixed(5)}'
+        ':${last.latitude.toStringAsFixed(5)},'
+        '${last.longitude.toStringAsFixed(5)}'
+        ':${distanceMeters.round()}';
+  }
+
+  bool sameRouteAs(NavRoute? other) => other != null && key == other.key;
 }
 
 /// A route with this app's congestion model applied.
@@ -251,6 +272,8 @@ RouteChoices? buildChoices(
 
   RouteScore? alternative;
   for (final c in candidates) {
+    // Identity is right here: the best route is one of these objects. The
+    // value comparison is for the UI, which sees rebuilt objects.
     if (identical(c, best)) continue;
     if (c.isBlocked) continue;
     if ((c.adjustedSeconds - best.adjustedSeconds).abs() <

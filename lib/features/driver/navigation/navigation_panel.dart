@@ -446,7 +446,7 @@ class _AlternativeOffer extends StatelessWidget {
     final alternative = choices.alternative;
     if (alternative == null) return const SizedBox.shrink();
 
-    final onRecommended = identical(active.route, choices.recommended.route);
+    final onRecommended = active.route.sameRouteAs(choices.recommended.route);
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.sm),

@@ -504,6 +504,37 @@ void main() {
       expect(buildChoices(const []), isNull);
     });
 
+    test('a route is identified by the road, not the object', () {
+      // Candidates are re-fetched every recalculation, so the same road
+      // arrives as a brand-new object each time. Comparing by reference made
+      // the panel mark the wrong option as active as soon as the choices
+      // refreshed — the header said one route while the radio showed the
+      // other.
+      final a = _route(durationSeconds: 600);
+      final b = NavRoute(
+        points: [...a.points],
+        distanceMeters: a.distanceMeters,
+        durationSeconds: a.durationSeconds,
+      );
+
+      expect(identical(a, b), isFalse);
+      expect(a.sameRouteAs(b), isTrue);
+      expect(a.key, b.key);
+    });
+
+    test('different roads are told apart', () {
+      final a = _route();
+      final b = NavRoute(
+        points: [
+          for (var i = 0; i <= 10; i++) LatLng(14.9600, 120.9010 + i * 0.001),
+        ],
+        distanceMeters: 2000,
+        durationSeconds: 600,
+      );
+      expect(a.sameRouteAs(b), isFalse);
+      expect(a.sameRouteAs(null), isFalse);
+    });
+
     test('labels why one route differs from another', () {
       final clear = scoreRoute(_route(), const [], now: now);
       expect(clear.conditionLabel, 'Nothing reported');

@@ -24,6 +24,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import '../models/navigation_state.dart';
+import 'tomtom_router.dart';
 
 class NavigationRouter {
   NavigationRouter._();
@@ -55,6 +56,19 @@ class NavigationRouter {
     int maxAlternatives = 2,
     LatLng? avoid,
   }) async {
+    // TomTom returns genuine alternatives and traffic-aware times, so when
+    // a key is configured there is nothing to force with detour waypoints.
+    if (TomTomRouter.isConfigured) {
+      final fromTomTom = await TomTomRouter.instance.route(
+        from,
+        to,
+        maxAlternatives: maxAlternatives,
+      );
+      if (fromTomTom.isNotEmpty) return fromTomTom;
+      // Key present but the call failed or was over quota: fall through to
+      // OSRM rather than leaving the driver without a route.
+    }
+
     final direct = await _request([from, to]);
     final routes = <NavRoute>[?direct];
 

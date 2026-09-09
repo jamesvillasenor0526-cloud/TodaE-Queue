@@ -130,13 +130,24 @@ class NavRoute {
   /// How this route was obtained, for the UI to label honestly.
   final String source;
 
+  /// Measured congestion already included in [durationSeconds], when the
+  /// router provides it. Zero from OSRM, which has no traffic feed at all.
+  final double trafficDelaySeconds;
+
   const NavRoute({
     required this.points,
     required this.distanceMeters,
     required this.durationSeconds,
     this.steps = const [],
     this.source = 'osrm',
+    this.trafficDelaySeconds = 0,
   });
+
+  /// Whether [durationSeconds] reflects real traffic rather than free flow.
+  ///
+  /// This decides whether the app's own traffic model should be applied on
+  /// top. Doing both would count the same congestion twice.
+  bool get isTrafficAware => source == 'tomtom';
 
   /// A straight line, used only when routing is unreachable. Flagged so the
   /// UI can say the route is unavailable rather than draw a fake road.
@@ -385,6 +396,13 @@ RouteScore scoreRoute(
   final on = incidentsOn(route, reports, now: now, from: from);
   var penalty = 0.0;
   for (final r in on) {
+    // When the router already measured the traffic, adding this app's guess
+    // at the same congestion on top would count it twice. Discrete
+    // incidents still count — a router knows the road is slow, but not that
+    // there is an accident on it.
+    if (route.isTrafficAware && r.type.category == ReportCategory.traffic) {
+      continue;
+    }
     // A corroborated report is trusted more, up to double weight — but a
     // lone report still counts for something.
     final confidence = (1 + r.confirmations.clamp(0, 4) * 0.25).clamp(1.0, 2.0);

@@ -126,6 +126,28 @@ class NavStep {
   }
 }
 
+/// The manoeuvre ahead of the driver, and the distance still to run.
+class UpcomingTurn {
+  final NavStep step;
+
+  /// Distance from the driver to the manoeuvre.
+  final double metersAway;
+
+  const UpcomingTurn({required this.step, required this.metersAway});
+
+  bool get isArrival => step.maneuver == 'arrive';
+
+  /// Identifies the manoeuvre itself rather than this snapshot of it.
+  ///
+  /// The route is rebuilt on every GPS fix, so the same physical turn arrives
+  /// as a fresh object several times a minute. Without this, guidance would
+  /// announce one turn over and over.
+  String get key => '${step.maneuver}|${step.modifier ?? ''}|${step.road}';
+
+  @override
+  String toString() => '${step.instruction} in ${metersAway.round()} m';
+}
+
 /// A route returned by the routing service.
 class NavRoute {
   /// Road geometry, in order.
@@ -177,6 +199,27 @@ class NavRoute {
   bool get isRealRoute => source != 'straight-line';
 
   NavStep? get nextStep => steps.isEmpty ? null : steps.first;
+
+  /// The manoeuvre the driver is approaching, and how far off it is.
+  ///
+  /// Not the same as [nextStep]. A router's first instruction is "depart",
+  /// and its distance is how far to drive *before* the first real turn, so
+  /// showing it verbatim tells a driver "start driving, 1.9 km" for the whole
+  /// leg and never names the turn coming up. What a driver needs is the next
+  /// manoeuvre and the distance to it, which is what this pairs.
+  ///
+  /// Routes are re-fetched from the driver's live position, so the distance
+  /// shrinks on its own as they approach.
+  UpcomingTurn? get upcoming {
+    var travelled = 0.0;
+    for (final step in steps) {
+      if (step.maneuver != 'depart') {
+        return UpcomingTurn(step: step, metersAway: travelled);
+      }
+      travelled += step.distanceMeters;
+    }
+    return null;
+  }
 
   /// Identifies a route by the road it describes rather than by object
   /// identity.

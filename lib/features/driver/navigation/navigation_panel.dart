@@ -21,7 +21,9 @@ import '../../../config/theme.dart';
 import '../../../core/models/navigation_state.dart';
 import '../../../core/models/road_report.dart';
 import '../../../core/models/trip_state.dart';
+import '../../../core/models/voice_guidance.dart';
 import '../../../core/services/navigation_service.dart';
+import '../../../core/services/voice_service.dart';
 import '../../shared/reports/quick_report_sheet.dart';
 
 class NavigationPanel extends StatefulWidget {
@@ -51,6 +53,10 @@ class _NavigationPanelState extends State<NavigationPanel> {
   /// Guards against a slow reroute overlapping the next GPS fix.
   bool _busyRouting = false;
 
+  /// Decides what to say. Held per panel so muting, or finishing a leg,
+  /// clears what has already been announced.
+  final VoiceGuide _guide = VoiceGuide();
+
   NavigationPhase get _phase => NavigationPhase.forTrip(widget.trip.trip);
 
   LatLng? get _target =>
@@ -60,6 +66,7 @@ class _NavigationPanelState extends State<NavigationPanel> {
   void initState() {
     super.initState();
     _start();
+    VoiceService.instance.load();
   }
 
   @override
@@ -69,6 +76,10 @@ class _NavigationPanelState extends State<NavigationPanel> {
     if (old.trip.trip != widget.trip.trip) {
       NavigationService.instance.reset();
       _route = null;
+      // The run to the destination may repeat turns from the run to the
+      // pickup, and they need saying again.
+      _guide.reset();
+      VoiceService.instance.stop();
       if (_phase.isNavigating) _recalculate();
     }
   }
@@ -76,6 +87,8 @@ class _NavigationPanelState extends State<NavigationPanel> {
   @override
   void dispose() {
     _positions?.cancel();
+    // Nothing should still be talking about a route the driver has left.
+    VoiceService.instance.stop();
     super.dispose();
   }
 
@@ -161,9 +174,27 @@ class _NavigationPanelState extends State<NavigationPanel> {
           if (mounted) setState(() => _banner = null);
         });
       }
+      _announce(reason);
     } finally {
       _busyRouting = false;
     }
+  }
+
+  /// Speaks the next cue, if there is one and the driver wants to hear it.
+  ///
+  /// Output only: nothing here can change the route, the trip or the
+  /// payment. If the speaker is muted or missing, the drive is unaffected.
+  void _announce(RerouteReason reason) {
+    final route = _route;
+    if (route == null || !VoiceService.instance.enabled) return;
+
+    final line = _guide.update(
+      turn: route.route.upcoming,
+      now: DateTime.now(),
+      reroute: reason,
+      ahead: groupIncidents(route.incidentsOnRoute, now: DateTime.now()),
+    );
+    if (line != null) VoiceService.instance.speak(line);
   }
 
   Future<void> _recalculate() async {
@@ -250,6 +281,7 @@ class _NavigationPanelState extends State<NavigationPanel> {
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
+                  const _VoiceToggle(),
                 ],
               ),
               const SizedBox(height: AppSpacing.sm),
@@ -265,9 +297,9 @@ class _NavigationPanelState extends State<NavigationPanel> {
                 )
               else ...[
                 _EtaRow(score: route, position: position),
-                if (route.route.nextStep != null) ...[
+                if (route.route.upcoming != null) ...[
                   const SizedBox(height: AppSpacing.sm),
-                  _NextTurn(step: route.route.nextStep!),
+                  _NextTurn(turn: route.route.upcoming!),
                 ],
                 if (!route.route.isRealRoute) ...[
                   const SizedBox(height: AppSpacing.sm),
@@ -366,24 +398,62 @@ class _EtaRow extends StatelessWidget {
   }
 }
 
+/// Mutes and unmutes spoken guidance.
+///
+/// Deliberately in the navigation strip rather than buried in settings: a
+/// driver who wants the voice off wants it off now, with one thumb, while
+/// driving.
+class _VoiceToggle extends StatelessWidget {
+  const _VoiceToggle();
+
+  @override
+  Widget build(BuildContext context) {
+    final voice = VoiceService.instance;
+    return ListenableBuilder(
+      listenable: voice,
+      builder: (context, _) => IconButton(
+        onPressed: () => voice.setEnabled(!voice.enabled),
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+        tooltip: voice.enabled ? 'Mute voice guidance' : 'Unmute voice guidance',
+        icon: Icon(
+          voice.enabled ? Icons.volume_up : Icons.volume_off,
+          size: 20,
+          color: voice.enabled ? AppTheme.primaryBlue : AppTheme.textMuted,
+        ),
+      ),
+    );
+  }
+}
+
 class _NextTurn extends StatelessWidget {
-  const _NextTurn({required this.step});
-  final NavStep step;
+  const _NextTurn({required this.turn});
+  final UpcomingTurn turn;
+
+  /// Matches the instruction, so the arrow does not point right while the
+  /// text says left.
+  IconData get _icon => switch (turn.step.modifier) {
+    'left' || 'slight left' || 'sharp left' => Icons.turn_left,
+    'right' || 'slight right' || 'sharp right' => Icons.turn_right,
+    'uturn' => Icons.u_turn_left,
+    _ => turn.isArrival ? Icons.flag : Icons.straight,
+  };
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
-        const Icon(Icons.turn_right, color: AppTheme.primaryBlue),
+        Icon(_icon, color: AppTheme.primaryBlue),
         const SizedBox(width: AppSpacing.sm),
         Expanded(
           child: Text(
-            step.instruction,
+            turn.step.instruction,
             style: const TextStyle(fontSize: 15),
           ),
         ),
         Text(
-          formatDistance(step.distanceMeters),
+          formatDistance(turn.metersAway),
           style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
         ),
       ],

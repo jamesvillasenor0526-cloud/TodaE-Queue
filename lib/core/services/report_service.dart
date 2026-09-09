@@ -163,6 +163,7 @@ class ReportService {
     required String reporterRole,
     String? note,
     File? photo,
+    String? tripId,
   }) async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) {
@@ -197,10 +198,15 @@ class ReportService {
         'reportedBy': uid,
         'reporterName': reporterName,
         'reporterRole': reporterRole,
+        // Lets an admin see which journey a report came from.
+        'tripId': tripId,
         'confirmations': 0,
         'confirmedBy': <String>[],
         'cleared': false,
+        // Starts unverified: corroboration or an admin promotes it.
+        'status': IncidentStatus.reported.wire,
         'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
         // Absolute expiry, so every client agrees on when this goes stale
         // without needing a scheduled cleanup.
         'expiresAt': Timestamp.fromDate(now.add(type.lifespan)),
@@ -273,6 +279,7 @@ class ReportService {
           'expiresAt': Timestamp.fromDate(
             DateTime.now().add(report.type.lifespan),
           ),
+          'updatedAt': FieldValue.serverTimestamp(),
         });
       });
     } on FirebaseException catch (e) {

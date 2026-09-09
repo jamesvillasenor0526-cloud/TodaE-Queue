@@ -27,6 +27,7 @@ import '../../../core/services/trip_service.dart';
 import '../../../core/models/road_report.dart';
 import '../../shared/reports/report_map_layer.dart';
 import '../../shared/reports/report_sheet.dart';
+import '../navigation/navigation_panel.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   const DriverHomeScreen({super.key});
@@ -1266,6 +1267,14 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
                                     highlightDestination:
                                         _isHighlightingDestination,
                                   ),
+                                  const SizedBox(height: 12),
+                                  // Live navigation: ETA, next turn, hazards
+                                  // ahead, automatic rerouting, and one-tap
+                                  // reporting.
+                                  if (data['bookingId'] != null)
+                                    NavigationPanelFor(
+                                      bookingId: data['bookingId'] as String,
+                                    ),
                                   const SizedBox(height: 16),
                                   // Every driver action for this trip comes
                                   // from the shared backend state, so only

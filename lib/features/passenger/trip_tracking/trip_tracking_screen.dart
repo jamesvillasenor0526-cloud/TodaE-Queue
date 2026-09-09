@@ -10,6 +10,7 @@ import '../../../config/theme.dart';
 import '../../../config/routes.dart';
 import '../booking/payment_screen.dart';
 import 'widgets/trip_status_card.dart';
+import 'widgets/driver_eta_card.dart';
 import '../../../core/models/trip_state.dart';
 import '../../../core/services/trip_service.dart';
 import '../../shared/reports/report_map_layer.dart';
@@ -622,6 +623,15 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                       ),
                     ),
                   ],
+                ),
+              ),
+              // Driver's live ETA and route, read straight off the same
+              // booking document the driver writes to.
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                child: DriverEtaCard(
+                  bookingId: widget.bookingId,
+                  trip: TripState.fromMap(widget.bookingId, data),
                 ),
               ),
               // One card driven entirely by the shared backend trip record,

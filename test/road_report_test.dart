@@ -15,7 +15,9 @@ RoadReport _report({
   int confirmations = 0,
   List<String> confirmedBy = const [],
   String reportedBy = 'user-a',
+  IncidentStatus? storedStatus,
 }) => RoadReport(
+  storedStatus: storedStatus,
   id: id,
   type: type,
   location: at ?? _center,
@@ -286,6 +288,187 @@ void main() {
       ], now: now);
 
       expect(zones.single.reports.map((r) => r.id), ['live']);
+    });
+  });
+
+  group('incident status', () {
+    test('a lone report is only "reported", not established fact', () {
+      expect(_report().statusAt(now), IncidentStatus.reported);
+    });
+
+    test('corroboration promotes it', () {
+      expect(
+        _report(confirmations: 1).statusAt(now),
+        IncidentStatus.verifying,
+      );
+      expect(
+        _report(confirmations: 3).statusAt(now),
+        IncidentStatus.confirmed,
+      );
+    });
+
+    test('an admin ruling overrides the report count either way', () {
+      expect(
+        _report(confirmations: 9, storedStatus: IncidentStatus.rejected)
+            .statusAt(now),
+        IncidentStatus.rejected,
+      );
+      expect(
+        _report(storedStatus: IncidentStatus.confirmed).statusAt(now),
+        IncidentStatus.confirmed,
+      );
+    });
+
+    test('expiry beats corroboration', () {
+      // Ten people agreeing an hour ago says nothing about now.
+      final stale = _report(
+        confirmations: 9,
+        expiresAt: now.subtract(const Duration(minutes: 1)),
+      );
+      expect(stale.statusAt(now), IncidentStatus.expired);
+    });
+
+    test('a cleared report is expired', () {
+      expect(_report(cleared: true).statusAt(now), IncidentStatus.expired);
+    });
+
+    test('rejected and expired incidents are not trusted for routing', () {
+      expect(IncidentStatus.rejected.isTrusted, isFalse);
+      expect(IncidentStatus.expired.isTrusted, isFalse);
+      expect(IncidentStatus.reported.isTrusted, isTrue);
+      expect(IncidentStatus.confirmed.isTrusted, isTrue);
+    });
+
+    test('a rejected report is not live', () {
+      expect(
+        _report(storedStatus: IncidentStatus.rejected).isLive(now),
+        isFalse,
+      );
+    });
+
+    test('report count includes the original reporter', () {
+      expect(_report().reportCount, 1);
+      expect(_report(confirmations: 2).reportCount, 3);
+    });
+
+    test('every status round-trips through its wire value', () {
+      for (final s in IncidentStatus.values) {
+        expect(IncidentStatus.fromWire(s.wire), s, reason: s.name);
+      }
+      expect(IncidentStatus.fromWire('NONSENSE'), isNull);
+      expect(IncidentStatus.fromWire(null), isNull);
+    });
+  });
+
+  group('grouping reports into incidents', () {
+    final live = now.add(const Duration(minutes: 20));
+    // ~110 m and ~2.2 km from the centre.
+    final close = LatLng(_center.latitude + 0.001, _center.longitude);
+    final away = LatLng(_center.latitude + 0.02, _center.longitude);
+
+    test('three drivers reporting one accident make one incident', () {
+      final incidents = groupIncidents([
+        _report(id: 'a', type: ReportType.accident, at: _center,
+            expiresAt: live),
+        _report(id: 'b', type: ReportType.accident, at: close,
+            expiresAt: live),
+        _report(id: 'c', type: ReportType.accident, at: close,
+            expiresAt: live),
+      ], now: now);
+
+      expect(incidents, hasLength(1));
+      expect(incidents.single.reportCount, 3);
+      expect(incidents.single.type, ReportType.accident);
+    });
+
+    test('the group counts confirmations as reports too', () {
+      final incidents = groupIncidents([
+        _report(id: 'a', type: ReportType.accident, confirmations: 2,
+            expiresAt: live),
+      ], now: now);
+      expect(incidents.single.reportCount, 3);
+    });
+
+    test('different incident types stay separate even at one spot', () {
+      final incidents = groupIncidents([
+        _report(id: 'a', type: ReportType.accident, at: _center,
+            expiresAt: live),
+        _report(id: 'b', type: ReportType.flooding, at: _center,
+            expiresAt: live),
+      ], now: now);
+      expect(incidents, hasLength(2));
+    });
+
+    test('the same problem far away is a separate incident', () {
+      final incidents = groupIncidents([
+        _report(id: 'a', type: ReportType.accident, at: _center,
+            expiresAt: live),
+        _report(id: 'b', type: ReportType.accident, at: away,
+            expiresAt: live),
+      ], now: now);
+      expect(incidents, hasLength(2));
+    });
+
+    test('several people agreeing promotes the group to confirmed', () {
+      final incidents = groupIncidents([
+        _report(id: 'a', type: ReportType.accident, at: _center,
+            expiresAt: live),
+        _report(id: 'b', type: ReportType.accident, at: close,
+            expiresAt: live),
+        _report(id: 'c', type: ReportType.accident, at: close,
+            expiresAt: live),
+        _report(id: 'd', type: ReportType.accident, at: close,
+            expiresAt: live),
+      ], now: now);
+      expect(incidents.single.statusAt(now), IncidentStatus.confirmed);
+    });
+
+    test('two reports put a group into verifying, not confirmed', () {
+      final incidents = groupIncidents([
+        _report(id: 'a', type: ReportType.accident, at: _center,
+            expiresAt: live),
+        _report(id: 'b', type: ReportType.accident, at: close,
+            expiresAt: live),
+      ], now: now);
+      expect(incidents.single.statusAt(now), IncidentStatus.verifying);
+    });
+
+    test('expired reports are left out of grouping', () {
+      final incidents = groupIncidents([
+        _report(id: 'live', type: ReportType.accident, at: _center,
+            expiresAt: live),
+        _report(id: 'dead', type: ReportType.accident, at: close,
+            expiresAt: now.subtract(const Duration(minutes: 1))),
+      ], now: now);
+      expect(incidents.single.reportCount, 1);
+    });
+
+    test('the worst report leads its group', () {
+      final incidents = groupIncidents([
+        _report(id: 'mild', type: ReportType.trafficModerate, at: _center,
+            expiresAt: live),
+        _report(id: 'bad', type: ReportType.roadClosure, at: close,
+            expiresAt: live),
+      ], now: now);
+      // Different types, so two groups — but the closure sorts first.
+      expect(incidents.first.type, ReportType.roadClosure);
+    });
+
+    test('summarises for the map callout', () {
+      final one = groupIncidents([
+        _report(id: 'a', at: _center, createdAt: now, expiresAt: live),
+      ], now: now).single;
+      expect(one.summary(now), 'Reported just now');
+
+      final many = groupIncidents([
+        _report(id: 'a', at: _center, createdAt: now, expiresAt: live),
+        _report(id: 'b', at: close, createdAt: now, expiresAt: live),
+      ], now: now).single;
+      expect(many.summary(now), contains('2 reports'));
+    });
+
+    test('nothing live yields no incidents', () {
+      expect(groupIncidents(const [], now: now), isEmpty);
     });
   });
 

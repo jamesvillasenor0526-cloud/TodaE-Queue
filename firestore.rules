@@ -128,13 +128,20 @@ service cloud.firestore {
 
       // Anyone signed in may corroborate a report, but what it says, where
       // it is and who filed it are fixed once written. Only the reporter or
-      // an admin may take it down.
+      // an admin may take it down, and only an admin may rule on whether an
+      // incident is confirmed or rejected — otherwise the verification
+      // system would be worthless, since a reporter could simply mark their
+      // own report confirmed. Corroboration by others is the only way a
+      // report gets promoted from the app.
       allow update: if signedIn()
         && request.resource.data.type == resource.data.type
         && request.resource.data.reportedBy == resource.data.reportedBy
         && request.resource.data.latitude == resource.data.latitude
         && request.resource.data.longitude == resource.data.longitude
         && request.resource.data.createdAt == resource.data.createdAt
+        && (request.resource.data.get('status', '')
+              == resource.data.get('status', '')
+            || isAdmin())
         && (request.resource.data.cleared == resource.data.cleared
             || resource.data.reportedBy == request.auth.uid
             || isAdmin());

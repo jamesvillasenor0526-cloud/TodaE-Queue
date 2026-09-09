@@ -105,6 +105,47 @@ enum ReportType {
   };
 }
 
+/// How much an incident is trusted.
+///
+/// A single report is not treated as established fact: one person can be
+/// mistaken, or malicious. Corroboration promotes an incident on its own,
+/// and an admin can settle it either way from the dashboard.
+enum IncidentStatus {
+  reported('REPORTED'),
+  verifying('VERIFYING'),
+  confirmed('CONFIRMED'),
+  rejected('REJECTED'),
+  expired('EXPIRED');
+
+  const IncidentStatus(this.wire);
+  final String wire;
+
+  static IncidentStatus? fromWire(String? value) {
+    if (value == null) return null;
+    for (final s in IncidentStatus.values) {
+      if (s.wire == value) return s;
+    }
+    return null;
+  }
+
+  /// An admin's word is final and is never recomputed from report counts.
+  bool get isAdminDecision =>
+      this == IncidentStatus.confirmed || this == IncidentStatus.rejected;
+
+  /// Whether this incident may influence what the driver is shown and how
+  /// routes are scored. Rejected and expired incidents influence nothing.
+  bool get isTrusted =>
+      this != IncidentStatus.rejected && this != IncidentStatus.expired;
+
+  String get label => switch (this) {
+    IncidentStatus.reported => 'Reported',
+    IncidentStatus.verifying => 'Being confirmed',
+    IncidentStatus.confirmed => 'Confirmed',
+    IncidentStatus.rejected => 'Dismissed',
+    IncidentStatus.expired => 'Expired',
+  };
+}
+
 /// One crowd-sourced report.
 class RoadReport {
   final String id;
@@ -118,8 +159,13 @@ class RoadReport {
   final int confirmations;
   final List<String> confirmedBy;
   final DateTime? createdAt;
+  final DateTime? updatedAt;
   final DateTime? expiresAt;
   final bool cleared;
+
+  /// Whatever status is stored on the document. Only meaningful when an
+  /// admin has ruled on it — otherwise [status] derives the value.
+  final IncidentStatus? storedStatus;
 
   const RoadReport({
     required this.id,
@@ -133,13 +179,38 @@ class RoadReport {
     this.confirmations = 0,
     this.confirmedBy = const [],
     this.createdAt,
+    this.updatedAt,
     this.expiresAt,
     this.cleared = false,
+    this.storedStatus,
   });
+
+  /// How many people have reported this, counting the original reporter.
+  int get reportCount => confirmations + 1;
+
+  /// The status to act on.
+  ///
+  /// An admin ruling wins outright. Otherwise expiry comes first — a stale
+  /// incident is expired no matter how many people once agreed — and below
+  /// that, corroboration promotes it.
+  IncidentStatus statusAt(DateTime now) {
+    final stored = storedStatus;
+    if (stored != null && stored.isAdminDecision) return stored;
+    if (cleared) return IncidentStatus.expired;
+    final until = expiresAt;
+    if (until != null && !now.isBefore(until)) return IncidentStatus.expired;
+    if (confirmations >= 3) return IncidentStatus.confirmed;
+    if (confirmations >= 1) return IncidentStatus.verifying;
+    return IncidentStatus.reported;
+  }
+
+  /// Convenience for call sites that already know the clock is now.
+  IncidentStatus get status => statusAt(DateTime.now());
 
   /// A report is live until it expires or someone marks it cleared.
   bool isLive(DateTime now) {
     if (cleared) return false;
+    if (storedStatus == IncidentStatus.rejected) return false;
     final until = expiresAt;
     if (until == null) return true;
     return now.isBefore(until);
@@ -214,10 +285,105 @@ class RoadReport {
       confirmations: (data['confirmations'] as num?)?.toInt() ?? 0,
       confirmedBy: (data['confirmedBy'] as List?)?.cast<String>() ?? const [],
       createdAt: conv(data['createdAt']),
+      updatedAt: conv(data['updatedAt']),
       expiresAt: conv(data['expiresAt']),
       cleared: data['cleared'] as bool? ?? false,
+      storedStatus: IncidentStatus.fromWire(data['status'] as String?),
     );
   }
+}
+
+/// Several reports of the same thing, shown as one incident.
+class Incident {
+  /// Worst-first, so [primary] is the most serious report in the group.
+  final List<RoadReport> reports;
+  final LatLng location;
+
+  const Incident({required this.reports, required this.location});
+
+  RoadReport get primary => reports.first;
+  ReportType get type => primary.type;
+
+  /// Everyone who reported it — the original reporter of each grouped
+  /// report, plus everyone who confirmed one.
+  int get reportCount =>
+      reports.fold(0, (sum, r) => sum + r.reportCount);
+
+  IncidentStatus statusAt(DateTime now) {
+    // The group is as trusted as its best-supported member, except that an
+    // admin dismissal of the primary report settles it.
+    if (primary.storedStatus == IncidentStatus.rejected) {
+      return IncidentStatus.rejected;
+    }
+    if (reports.any((r) => r.statusAt(now) == IncidentStatus.confirmed) ||
+        reportCount >= 4) {
+      return IncidentStatus.confirmed;
+    }
+    if (reportCount >= 2) return IncidentStatus.verifying;
+    return primary.statusAt(now);
+  }
+
+  DateTime? get newestReport {
+    DateTime? newest;
+    for (final r in reports) {
+      final at = r.createdAt;
+      if (at == null) continue;
+      if (newest == null || at.isAfter(newest)) newest = at;
+    }
+    return newest;
+  }
+
+  String summary(DateTime now) {
+    final count = reportCount;
+    final age = primary.ageLabel(now);
+    return count == 1
+        ? 'Reported $age'
+        : '$count reports · latest $age';
+  }
+}
+
+/// How close two reports of the same type must be to be the same incident.
+///
+/// Wider than the submit-time dedupe radius, because reports that arrive
+/// from opposite ends of the same jam should still read as one problem.
+const double kIncidentGroupingKm = 0.25;
+
+/// Groups nearby reports of the same type into single incidents.
+///
+/// Three drivers reporting the same accident should be one marker saying
+/// "3 reports", not three markers implying three accidents.
+List<Incident> groupIncidents(
+  Iterable<RoadReport> reports, {
+  required DateTime now,
+  double radiusKm = kIncidentGroupingKm,
+}) {
+  // Worst first so the most serious report leads its group.
+  final live = reports.where((r) => r.isLive(now)).toList()
+    ..sort((a, b) => b.type.severity.compareTo(a.type.severity));
+
+  final groups = <List<RoadReport>>[];
+  for (final report in live) {
+    List<RoadReport>? match;
+    var best = double.infinity;
+    for (final group in groups) {
+      if (group.first.type != report.type) continue;
+      final d = distanceKm(group.first.location, report.location);
+      if (d <= radiusKm && d < best) {
+        match = group;
+        best = d;
+      }
+    }
+    if (match == null) {
+      groups.add([report]);
+    } else {
+      match.add(report);
+    }
+  }
+
+  return [
+    for (final group in groups)
+      Incident(reports: group, location: group.first.location),
+  ];
 }
 
 /// Straight-line distance in km — good enough for deciding whether a report

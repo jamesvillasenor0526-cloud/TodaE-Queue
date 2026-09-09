@@ -8,6 +8,7 @@ import '../../../core/models/road_report.dart';
 import '../../../core/models/traffic_segment.dart';
 import '../../../core/services/report_service.dart';
 import '../../../core/services/road_geometry_service.dart';
+import '../../../core/services/traffic_incident_service.dart';
 
 /// Paints live traffic and incident reports onto a [FlutterMap] as coloured
 /// road segments — strong red where conditions are bad, fading to a slight
@@ -163,6 +164,10 @@ class _TrafficOverlayState extends State<TrafficOverlay> {
               ),
             ],
 
+            // TomTom's measured incidents, under TODA's own so a driver's
+            // local knowledge is never hidden behind them.
+            _LiveTrafficLayer(origin: _subscribedOrigin),
+
             // Discrete incidents sit on top of the traffic shading as one
             // marker each, however many people reported them.
             _IncidentMarkers(reports: reports),
@@ -192,6 +197,71 @@ class _TrafficOverlayState extends State<TrafficOverlay> {
       if (!mounted || ways.isEmpty) return;
       setState(() => _ways = ways);
     });
+  }
+}
+
+/// TomTom's measured incidents, drawn along the roads they affect.
+///
+/// Deliberately quieter than the driver reports layered above it: these are
+/// dashed and semi-transparent so the two never read as the same thing. A
+/// report is somebody here saying what they can see; this is a measurement
+/// from elsewhere, useful but impersonal, and the driver should be able to
+/// tell which is which at a glance.
+///
+/// TomTom returns these as LineStrings along the road, so unlike a driver's
+/// point report they need no snapping.
+class _LiveTrafficLayer extends StatefulWidget {
+  const _LiveTrafficLayer({required this.origin});
+
+  final LatLng origin;
+
+  @override
+  State<_LiveTrafficLayer> createState() => _LiveTrafficLayerState();
+}
+
+class _LiveTrafficLayerState extends State<_LiveTrafficLayer> {
+  List<TrafficIncident> _incidents = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LiveTrafficLayer old) {
+    super.didUpdateWidget(old);
+    if (old.origin != widget.origin) _load();
+  }
+
+  Future<void> _load() async {
+    // The service throttles and caches, so calling on every re-centre is
+    // cheap and will not burn the daily quota.
+    final found = await TrafficIncidentService.instance.near(widget.origin);
+    if (!mounted) return;
+    setState(() => _incidents = found);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_incidents.isEmpty) return const SizedBox.shrink();
+
+    return PolylineLayer(
+      polylines: [
+        for (final i in _incidents)
+          if (i.points.length > 1)
+            Polyline(
+              points: i.points,
+              strokeWidth: i.isSignificant ? 6 : 4,
+              color: i.type.color.withValues(
+                alpha: i.isSignificant ? 0.55 : 0.35,
+              ),
+              // Dashed, so measured traffic never looks like a report.
+              pattern: StrokePattern.dashed(segments: const [10, 6]),
+              strokeCap: StrokeCap.round,
+            ),
+      ],
+    );
   }
 }
 

@@ -188,6 +188,81 @@ class RouteScore {
   /// the wall clock and could disagree with the list it is filtering.
   bool get isBlocked =>
       incidentsOnRoute.any((r) => r.type == ReportType.roadClosure);
+
+  /// The worst thing reported on this route, for labelling the choice.
+  ReportType? get worstIncident {
+    ReportType? worst;
+    for (final r in incidentsOnRoute) {
+      if (worst == null || r.type.severity > worst.severity) worst = r.type;
+    }
+    return worst;
+  }
+
+  /// A short reason the driver can weigh one route against another by.
+  ///
+  /// Says "reported" rather than stating conditions as fact, because that is
+  /// what this is — other people's reports, not a traffic measurement.
+  String get conditionLabel {
+    if (isBlocked) return 'Road reported closed';
+    final worst = worstIncident;
+    if (worst == null) return 'Nothing reported';
+    final count = incidentsOnRoute.length;
+    return count == 1
+        ? '${worst.label} reported'
+        : '${worst.label} + ${count - 1} more reported';
+  }
+}
+
+/// Two routes offered to the driver, best first.
+///
+/// Deliberately capped: the spec asks for a recommendation and at most one
+/// alternative, because a driver choosing between five lines on a phone is
+/// worse off than one being given a good answer.
+class RouteChoices {
+  final RouteScore recommended;
+  final RouteScore? alternative;
+
+  const RouteChoices({required this.recommended, this.alternative});
+
+  bool get hasAlternative => alternative != null;
+
+  /// How much longer the alternative takes. Negative would mean it is
+  /// quicker, which cannot happen since the quicker one is recommended.
+  Duration? get alternativeCost => alternative == null
+      ? null
+      : Duration(
+          seconds:
+              (alternative!.adjustedSeconds - recommended.adjustedSeconds)
+                  .round(),
+        );
+}
+
+/// Picks what to offer the driver from everything the router found.
+///
+/// The best usable route is recommended. The alternative is the next best
+/// that is meaningfully different — offering a route two seconds slower down
+/// substantially the same roads is noise, not a choice.
+RouteChoices? buildChoices(
+  List<RouteScore> candidates, {
+  Duration minDifference = const Duration(seconds: 30),
+}) {
+  final best = chooseBest(candidates);
+  if (best == null) return null;
+
+  RouteScore? alternative;
+  for (final c in candidates) {
+    if (identical(c, best)) continue;
+    if (c.isBlocked) continue;
+    if ((c.adjustedSeconds - best.adjustedSeconds).abs() <
+        minDifference.inSeconds) {
+      continue;
+    }
+    if (alternative == null ||
+        c.adjustedSeconds < alternative.adjustedSeconds) {
+      alternative = c;
+    }
+  }
+  return RouteChoices(recommended: best, alternative: alternative);
 }
 
 /// How close to the line a report has to be to count as "on this route".
@@ -302,10 +377,18 @@ const double kOffRouteMeters = 60;
 const int kOffRouteFixes = 3;
 
 /// Whether [current] should be replaced by [candidate].
+///
+/// [driverPickedRoute] means the driver deliberately chose this route over
+/// the recommendation. Their choice is then respected: the system will not
+/// quietly put them back on the faster one, because a driver who picked the
+/// longer way usually knows something the app does not. Safety still
+/// overrides — a closure ahead, or leaving the route entirely, reroutes
+/// regardless.
 RerouteReason rerouteDecision({
   required RouteScore current,
   required RouteScore candidate,
   bool driverIsOffRoute = false,
+  bool driverPickedRoute = false,
 }) {
   if (driverIsOffRoute) return RerouteReason.offRoute;
 
@@ -314,6 +397,8 @@ RerouteReason rerouteDecision({
     return RerouteReason.roadBlocked;
   }
   if (candidate.isBlocked) return RerouteReason.none;
+
+  if (driverPickedRoute) return RerouteReason.none;
 
   final saving = current.adjustedSeconds - candidate.adjustedSeconds;
   if (saving < kMinRerouteSaving.inSeconds) return RerouteReason.none;

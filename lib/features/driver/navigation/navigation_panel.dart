@@ -44,6 +44,7 @@ class _NavigationPanelState extends State<NavigationPanel> {
   StreamSubscription<Position>? _positions;
   LatLng? _position;
   RouteScore? _route;
+  RouteChoices? _choices;
   String? _banner;
   bool _working = false;
 
@@ -150,6 +151,7 @@ class _NavigationPanelState extends State<NavigationPanel> {
       if (!mounted) return;
       setState(() {
         _route = NavigationService.instance.currentRoute;
+        _choices = NavigationService.instance.choices;
         if (reason != RerouteReason.none) _banner = reason.message;
       });
       if (reason != RerouteReason.none) {
@@ -178,6 +180,25 @@ class _NavigationPanelState extends State<NavigationPanel> {
     if (!mounted) return;
     setState(() {
       _route = score;
+      _choices = NavigationService.instance.choices;
+      _working = false;
+    });
+  }
+
+  /// Switches to the route the driver picked instead of the recommendation.
+  Future<void> _useRoute(RouteScore route) async {
+    final position = _position;
+    if (position == null) return;
+
+    setState(() => _working = true);
+    await NavigationService.instance.useRoute(
+      bookingId: widget.bookingId,
+      route: route,
+      from: position,
+    );
+    if (!mounted) return;
+    setState(() {
+      _route = route;
       _working = false;
     });
   }
@@ -255,6 +276,14 @@ class _NavigationPanelState extends State<NavigationPanel> {
                 if (route.incidentsOnRoute.isNotEmpty) ...[
                   const SizedBox(height: AppSpacing.sm),
                   _AheadWarning(reports: route.incidentsOnRoute),
+                ],
+                if (_choices?.hasAlternative ?? false) ...[
+                  const SizedBox(height: AppSpacing.sm),
+                  _AlternativeOffer(
+                    choices: _choices!,
+                    active: route,
+                    onUse: _useRoute,
+                  ),
                 ],
               ],
 
@@ -391,6 +420,133 @@ class _AheadWarning extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The other way round, offered as a choice rather than imposed.
+///
+/// Shows both routes with the numbers behind the recommendation — time,
+/// distance and what has been reported on each — so the driver can see why
+/// one is preferred instead of being told to trust it. A driver who knows
+/// the roads may well disagree, and picking the other one sticks.
+class _AlternativeOffer extends StatelessWidget {
+  const _AlternativeOffer({
+    required this.choices,
+    required this.active,
+    required this.onUse,
+  });
+
+  final RouteChoices choices;
+  final RouteScore active;
+  final Future<void> Function(RouteScore) onUse;
+
+  @override
+  Widget build(BuildContext context) {
+    final alternative = choices.alternative;
+    if (alternative == null) return const SizedBox.shrink();
+
+    final onRecommended = identical(active.route, choices.recommended.route);
+
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: AppTheme.info.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: AppTheme.info.withValues(alpha: 0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.alt_route, size: 16, color: AppTheme.info),
+              SizedBox(width: AppSpacing.xs),
+              Text(
+                'Another way',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.info,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _RouteOption(
+            score: choices.recommended,
+            title: 'Recommended',
+            selected: onRecommended,
+            onUse: onRecommended ? null : () => onUse(choices.recommended),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          _RouteOption(
+            score: alternative,
+            title: 'Alternative',
+            selected: !onRecommended,
+            onUse: !onRecommended ? null : () => onUse(alternative),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RouteOption extends StatelessWidget {
+  const _RouteOption({
+    required this.score,
+    required this.title,
+    required this.selected,
+    required this.onUse,
+  });
+
+  final RouteScore score;
+  final String title;
+  final bool selected;
+  final VoidCallback? onUse;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(
+          selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+          size: 16,
+          color: selected ? AppTheme.primaryGreen : AppTheme.textMuted,
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '$title · ${formatEta(Duration(seconds: score.adjustedSeconds.round()))}'
+                ' · ${formatDistance(score.route.distanceMeters)}',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                ),
+              ),
+              Text(
+                score.conditionLabel,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: AppTheme.textMuted,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (onUse != null)
+          TextButton(
+            onPressed: onUse,
+            style: TextButton.styleFrom(
+              minimumSize: const Size(64, 40),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+            ),
+            child: const Text('Use'),
+          ),
+      ],
     );
   }
 }

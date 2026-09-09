@@ -113,9 +113,17 @@ class NavigationService {
   DateTime? _lastRecalc;
   DateTime? _lastLocationWrite;
   RouteScore? _current;
+  RouteChoices? _choices;
+  bool _driverPicked = false;
 
   /// The route currently being driven, if any.
   RouteScore? get currentRoute => _current;
+
+  /// What the driver may choose between for this leg.
+  RouteChoices? get choices => _choices;
+
+  /// Whether the driver overrode the recommendation.
+  bool get driverPickedRoute => _driverPicked;
 
   DocumentReference<Map<String, dynamic>> _ref(String bookingId) =>
       _firestore.collection('bookings').doc(bookingId);
@@ -136,6 +144,10 @@ class NavigationService {
     _lastRecalc = null;
     _lastLocationWrite = null;
     _current = null;
+    _choices = null;
+    // A choice belongs to the leg it was made on; the destination leg starts
+    // from the recommendation again.
+    _driverPicked = false;
   }
 
   /// Where the driver is heading for the given trip state, or null when
@@ -201,13 +213,32 @@ class NavigationService {
     final scored = [
       for (final r in routes) scoreRoute(r, reports, now: now),
     ];
-    final best = chooseBest(scored);
-    if (best == null) return null;
+    final choices = buildChoices(scored);
+    if (choices == null) return null;
 
-    _current = best;
+    _choices = choices;
+    _driverPicked = false;
+    _current = choices.recommended;
     _lastRecalc = now;
-    await _publishRoute(bookingId, best, from, message: null);
-    return best;
+    await _publishRoute(bookingId, choices.recommended, from, message: null);
+    return choices.recommended;
+  }
+
+  /// Switches to a route the driver picked over the recommendation.
+  ///
+  /// Sets [driverPickedRoute], which stops the next tick quietly putting
+  /// them back on the faster one. A closure ahead or leaving the route still
+  /// reroutes — the override is about preference, not safety.
+  Future<void> useRoute({
+    required String bookingId,
+    required RouteScore route,
+    required LatLng from,
+  }) async {
+    _current = route;
+    _driverPicked = true;
+    _offRoute.reset();
+    _lastRecalc = DateTime.now();
+    await _publishRoute(bookingId, route, from, message: null);
   }
 
   /// One navigation tick: the driver has moved, so update the shared record
@@ -266,13 +297,18 @@ class NavigationService {
     final scored = [
       for (final r in candidates) scoreRoute(r, reports, now: now),
     ];
-    final best = chooseBest(scored);
-    if (best == null) return RerouteReason.none;
+    final choices = buildChoices(scored);
+    if (choices == null) return RerouteReason.none;
+    // Refresh what the driver can switch to, so the options panel reflects
+    // conditions now rather than when the leg started.
+    _choices = choices;
+    final best = choices.recommended;
 
     final decision = rerouteDecision(
       current: rescoredCurrent,
       candidate: best,
       driverIsOffRoute: wentOffRoute,
+      driverPickedRoute: _driverPicked,
     );
 
     if (decision == RerouteReason.none) {
@@ -281,6 +317,10 @@ class NavigationService {
       await _publishProgress(bookingId, rescoredCurrent, position);
       return RerouteReason.none;
     }
+
+    // A forced reroute overrides the driver's earlier pick, and the new
+    // route becomes the recommendation rather than a lingering override.
+    _driverPicked = false;
 
     _current = best;
     await _publishRoute(bookingId, best, position, message: decision.message);

@@ -327,6 +327,141 @@ void main() {
     });
   });
 
+  group('offering route alternatives', () {
+    RouteScore plain(double seconds, {double metres = 1075}) => RouteScore(
+      route: NavRoute(
+        points: _route().points,
+        distanceMeters: metres,
+        durationSeconds: seconds,
+      ),
+      incidentsOnRoute: const [],
+      penaltySeconds: 0,
+    );
+
+    test('recommends the quickest and offers the next best', () {
+      final choices = buildChoices([plain(720), plain(600), plain(900)])!;
+      expect(choices.recommended.route.durationSeconds, 600);
+      expect(choices.alternative!.route.durationSeconds, 720);
+    });
+
+    test('offers nothing when there is only one route', () {
+      final choices = buildChoices([plain(600)])!;
+      expect(choices.hasAlternative, isFalse);
+      expect(choices.alternativeCost, isNull);
+    });
+
+    test('does not offer a route that is barely different', () {
+      // Ten seconds apart is not a choice, it is noise.
+      final choices = buildChoices([plain(600), plain(610)])!;
+      expect(choices.hasAlternative, isFalse);
+    });
+
+    test('never offers a blocked road as the alternative', () {
+      final blocked = scoreRoute(
+        _route(durationSeconds: 300),
+        [_report(type: ReportType.roadClosure)],
+        now: now,
+      );
+      final choices = buildChoices([plain(900), blocked])!;
+      expect(choices.recommended.isBlocked, isFalse);
+      expect(choices.hasAlternative, isFalse);
+    });
+
+    test('says how much the alternative costs', () {
+      final choices = buildChoices([plain(600), plain(720)])!;
+      expect(choices.alternativeCost, const Duration(seconds: 120));
+    });
+
+    test('nothing to choose from yields nothing', () {
+      expect(buildChoices(const []), isNull);
+    });
+
+    test('labels why one route differs from another', () {
+      final clear = scoreRoute(_route(), const [], now: now);
+      expect(clear.conditionLabel, 'Nothing reported');
+
+      final busy = scoreRoute(_route(), [_report()], now: now);
+      expect(busy.conditionLabel, 'Heavy traffic reported');
+      expect(busy.worstIncident, ReportType.trafficHeavy);
+
+      final closed = scoreRoute(
+        _route(),
+        [_report(type: ReportType.roadClosure)],
+        now: now,
+      );
+      expect(closed.conditionLabel, 'Road reported closed');
+    });
+
+    test('names the worst incident when several are on the route', () {
+      final score = scoreRoute(
+        _route(),
+        [
+          _report(id: 'a', type: ReportType.hazard),
+          _report(id: 'b', type: ReportType.accident),
+        ],
+        now: now,
+      );
+      expect(score.worstIncident, ReportType.accident);
+      expect(score.conditionLabel, 'Accident + 1 more reported');
+    });
+  });
+
+  group('a route the driver chose deliberately', () {
+    RouteScore plain(double seconds) => RouteScore(
+      route: _route(durationSeconds: seconds),
+      incidentsOnRoute: const [],
+      penaltySeconds: 0,
+    );
+
+    test('is not quietly swapped back to the faster one', () {
+      // The driver picked the longer way. They usually know something the
+      // app does not, and overriding them makes the feature pointless.
+      expect(
+        rerouteDecision(
+          current: plain(900),
+          candidate: plain(600),
+          driverPickedRoute: true,
+        ),
+        RerouteReason.none,
+      );
+    });
+
+    test('would have been swapped without the override', () {
+      expect(
+        rerouteDecision(current: plain(900), candidate: plain(600)),
+        RerouteReason.fasterRoute,
+      );
+    });
+
+    test('is still abandoned when the road ahead is reported closed', () {
+      final blocked = scoreRoute(
+        _route(durationSeconds: 300),
+        [_report(type: ReportType.roadClosure)],
+        now: now,
+      );
+      expect(
+        rerouteDecision(
+          current: blocked,
+          candidate: plain(1200),
+          driverPickedRoute: true,
+        ),
+        RerouteReason.roadBlocked,
+      );
+    });
+
+    test('is still recalculated if they leave the route', () {
+      expect(
+        rerouteDecision(
+          current: plain(600),
+          candidate: plain(600),
+          driverIsOffRoute: true,
+          driverPickedRoute: true,
+        ),
+        RerouteReason.offRoute,
+      );
+    });
+  });
+
   group('off-route detection', () {
     test('a driver on the road is never off-route', () {
       final d = OffRouteDetector();

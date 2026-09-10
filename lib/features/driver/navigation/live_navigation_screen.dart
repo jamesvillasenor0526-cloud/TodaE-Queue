@@ -221,7 +221,8 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
     if (active == null || choices == null) return const [];
     final out = <({RouteScore score, List<LatLng> line})>[];
     for (final s in choices.all) {
-      if (s.route.sameRouteAs(active.route)) continue;
+      // The road being driven, fetched again, is not another way.
+      if (_nav.isActiveChoice(s)) continue;
       if (s.isBlocked) continue;
       if (at == null) {
         out.add((score: s, line: s.route.points));

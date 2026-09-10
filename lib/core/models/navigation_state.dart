@@ -555,6 +555,9 @@ const double kMaxSharedWithRecommended = 0.7;
 /// Two alternatives that share more than this with each other are one.
 const double kMaxSharedBetweenAlternatives = 0.9;
 
+/// A route that runs this much on another is the same road, fetched again.
+const double kSameRoadFraction = 0.9;
+
 /// Whether [r] makes the road impassable at [now], rather than just slow.
 ///
 /// A blocked route loses to any usable one however long the way round, so

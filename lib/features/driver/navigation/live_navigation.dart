@@ -106,6 +106,29 @@ class LiveNavigation extends ChangeNotifier {
   RouteChoices? get choices => _choices;
   RouteProgress? get progress => _progress;
 
+  /// Whether [choice] is the road being driven.
+  ///
+  /// Not [NavRoute.sameRouteAs]: that compares endpoints, and a route
+  /// fetched again a few seconds later starts wherever the driver is by then.
+  /// So the fastest route on offer never matched the one being driven — the
+  /// panel ticked neither and offered "Use" on both, and the map drew the
+  /// driven road a second time as an "alternative". A choice is the active
+  /// road when nearly all of it runs on the active route (which, fetched
+  /// earlier, also covers the stretch already driven).
+  bool isActiveChoice(RouteScore choice) {
+    final active = _route;
+    if (active == null) return false;
+    if (choice.route.sameRouteAs(active.route)) return true;
+    final key = '${active.route.key}|${choice.route.key}';
+    // A new pair every recalculation; kept small over a long trip.
+    if (_activeMatches.length > 64) _activeMatches.clear();
+    return _activeMatches[key] ??=
+        sharedFraction(choice.route.points, active.route.points) >=
+        kSameRoadFraction;
+  }
+
+  final Map<String, bool> _activeMatches = {};
+
   /// Running distances along [route], for views that re-project the driver
   /// between readings (while animating the arrow) without recomputing them.
   List<double>? get cumulative => _cumulative;
@@ -403,7 +426,7 @@ class LiveNavigation extends ChangeNotifier {
   Future<void> useRoute(RouteScore choice) async {
     final position = _position, id = _bookingId;
     if (position == null || id == null) return;
-    if (_route != null && choice.route.sameRouteAs(_route!.route)) return;
+    if (isActiveChoice(choice)) return;
     _working = true;
     notifyListeners();
     try {

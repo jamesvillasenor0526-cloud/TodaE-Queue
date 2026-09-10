@@ -448,6 +448,33 @@ void main() {
     });
   });
 
+  group('the road being driven, fetched again', () {
+    test('is the same road, though its endpoints differ', () {
+      // Re-fetched from 1 km further on, the route starts somewhere else, so
+      // comparing endpoints says it is a different route — and the panel
+      // ticked neither option and offered Use on both. Judged by the road,
+      // it is the one being driven.
+      final p = progressAlong(
+        main.points,
+        main.points[cum.indexWhere((c) => c >= 1000)],
+        cumulative: cum,
+      )!;
+      final fetchedAgain = trimRouteTo(main, p);
+      expect(fetchedAgain.sameRouteAs(main), isFalse);
+      expect(
+        sharedFraction(fetchedAgain.points, main.points),
+        greaterThanOrEqualTo(kSameRoadFraction),
+      );
+    });
+
+    test('a genuinely different way is not mistaken for it', () {
+      expect(
+        sharedFraction(routes[1].points, main.points),
+        lessThan(kSameRoadFraction),
+      );
+    });
+  });
+
   group('reusing a route found a minute ago', () {
     test('it starts where the driver is now', () {
       final p = progressAlong(main.points, main.points[80], cumulative: cum)!;

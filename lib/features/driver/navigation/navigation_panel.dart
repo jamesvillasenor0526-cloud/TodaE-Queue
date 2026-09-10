@@ -162,7 +162,7 @@ class _NavigationPanelState extends State<NavigationPanel> {
                   const SizedBox(height: AppSpacing.sm),
                   _AlternativeOffer(
                     choices: choices!,
-                    active: route,
+                    isActive: _nav.isActiveChoice,
                     onUse: _nav.useRoute,
                   ),
                 ],
@@ -412,18 +412,21 @@ class _AheadWarning extends StatelessWidget {
 class _AlternativeOffer extends StatelessWidget {
   const _AlternativeOffer({
     required this.choices,
-    required this.active,
+    required this.isActive,
     required this.onUse,
   });
 
   final RouteChoices choices;
-  final RouteScore active;
+
+  /// Whether a choice is the road being driven — judged by the road, since
+  /// a route fetched again starts wherever the driver now is.
+  final bool Function(RouteScore) isActive;
   final Future<void> Function(RouteScore) onUse;
 
   @override
   Widget build(BuildContext context) {
     if (!choices.hasAlternative) return const SizedBox.shrink();
-    final onRecommended = active.route.sameRouteAs(choices.recommended.route);
+    final onRecommended = isActive(choices.recommended);
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.sm),
@@ -459,7 +462,7 @@ class _AlternativeOffer extends StatelessWidget {
           for (final alt in choices.alternatives) ...[
             const SizedBox(height: AppSpacing.xs),
             () {
-              final selected = active.route.sameRouteAs(alt.route);
+              final selected = isActive(alt);
               return _RouteOption(
                 score: alt,
                 // The real difference, against the fastest — the same words

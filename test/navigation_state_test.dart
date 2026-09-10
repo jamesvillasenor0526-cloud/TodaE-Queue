@@ -333,6 +333,147 @@ void main() {
     });
   });
 
+  group('deciding whether a detour is worth looking for', () {
+    test('a minor report alone is not worth a routing request', () {
+      for (final minor in [
+        ReportType.hazard,
+        ReportType.roadDamage,
+        ReportType.checkpoint,
+        ReportType.trafficModerate,
+        ReportType.breakdown,
+      ]) {
+        expect(
+          worthLookingForDetour([_report(type: minor)]),
+          isFalse,
+          reason: minor.name,
+        );
+      }
+    });
+
+    test('anything that costs real time is worth looking round', () {
+      for (final serious in [
+        ReportType.roadClosure,
+        ReportType.accident,
+        ReportType.flooding,
+        ReportType.trafficHeavy,
+        ReportType.fallenTree,
+        ReportType.construction,
+      ]) {
+        expect(
+          worthLookingForDetour([_report(type: serious)]),
+          isTrue,
+          reason: serious.name,
+        );
+      }
+    });
+
+    test('minor reports add up', () {
+      // Two hazards and a checkpoint on one road: 3.5 minutes between them.
+      expect(
+        worthLookingForDetour([
+          _report(id: 'a', type: ReportType.hazard),
+          _report(id: 'b', type: ReportType.hazard),
+          _report(id: 'c', type: ReportType.checkpoint),
+        ]),
+        isTrue,
+      );
+    });
+
+    test('corroboration can make a minor report worth it', () {
+      // Moderate traffic four drivers agree on is modelled at 4 minutes.
+      expect(
+        worthLookingForDetour([
+          _report(type: ReportType.trafficModerate, confirmations: 4),
+        ]),
+        isTrue,
+      );
+      // A hazard at double weight is still only 2 minutes.
+      expect(
+        worthLookingForDetour([
+          _report(type: ReportType.hazard, confirmations: 4),
+        ]),
+        isFalse,
+      );
+    });
+
+    test('nothing reported is never worth a request', () {
+      expect(worthLookingForDetour(const []), isFalse);
+    });
+
+    group('skipping the lookup loses no reroute', () {
+      // The justification for skipping: a mid-trip reroute has to save two
+      // minutes, and skipped reports are worth two minutes at most, so a
+      // detour around them could not have been taken.
+      RouteScore through(RoadReport r) =>
+          scoreRoute(_route(), [r], now: now);
+      RouteScore around(RoadReport r, {required double seconds}) => scoreRoute(
+        NavRoute(
+          points: [
+            for (var i = 0; i <= 10; i++)
+              LatLng(14.9560, 120.9010 + i * 0.001),
+          ],
+          distanceMeters: 1075,
+          durationSeconds: seconds,
+        ),
+        [r],
+        now: now,
+      );
+
+      test('a lone hazard, even with a detour that costs nothing', () {
+        final hazard = _report(type: ReportType.hazard);
+        expect(around(hazard, seconds: 600).incidentsOnRoute, isEmpty);
+        expect(
+          rerouteDecision(
+            current: through(hazard),
+            candidate: around(hazard, seconds: 600),
+          ),
+          RerouteReason.none,
+        );
+      });
+
+      test('the most a skipped report can be worth, with any real detour', () {
+        // 120 s is the ceiling for anything skipped. Going round costing even
+        // one second leaves the saving short of the two minutes required.
+        final worst = _report(type: ReportType.hazard, confirmations: 4);
+        expect(reportDelaySeconds(worst), 120);
+        expect(
+          rerouteDecision(
+            current: through(worst),
+            candidate: around(worst, seconds: 601),
+          ),
+          RerouteReason.none,
+        );
+      });
+
+      test('the one case given up: a detour that costs exactly nothing', () {
+        // Stated rather than hidden. At exactly 120 s with a way round that
+        // takes no extra time at all, a reroute would have been possible.
+        // A route that fast would normally already be among the alternatives
+        // TomTom returns unasked, which are scored either way.
+        final worst = _report(type: ReportType.hazard, confirmations: 4);
+        expect(
+          rerouteDecision(
+            current: through(worst),
+            candidate: around(worst, seconds: 600),
+          ),
+          RerouteReason.fasterRoute,
+        );
+      });
+    });
+
+    test('scoring and the threshold agree on what a report costs', () {
+      final reports = [
+        _report(id: 'a', type: ReportType.accident, confirmations: 2),
+        _report(id: 'b', type: ReportType.hazard),
+      ];
+      final score = scoreRoute(_route(), reports, now: now);
+      expect(
+        score.penaltySeconds,
+        reports.fold(0.0, (s, r) => s + reportDelaySeconds(r)),
+      );
+    });
+  });
+
   group('driver reports on a route with live traffic', () {
     // TomTom is the router on every trip, so every route is traffic-aware.
     // These pin down when a driver's report adds time on top of TomTom's.

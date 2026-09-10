@@ -349,11 +349,19 @@ class NavigationService {
     if (scored.isEmpty) return scored;
 
     final best = chooseBest(scored)!;
-    final trouble = <RoadReport>[
+    // Keyed by id: a report on both the fresh route and the one being driven
+    // is one report, and summing it twice would push minor delays over the
+    // threshold below.
+    final trouble = <String, RoadReport>{
       for (final r in [...best.incidentsOnRoute, ...alsoAvoid])
-        if (conditions.costsTime(r)) r,
-    ]..sort((a, b) => b.type.severity.compareTo(a.type.severity));
-    if (trouble.isEmpty) return scored;
+        if (conditions.costsTime(r)) r.id: r,
+    }.values.toList()
+      ..sort((a, b) => b.type.severity.compareTo(a.type.severity));
+
+    // Minor reports alone are not worth a request: the driver keeps the
+    // road and the delay goes into the ETA, which the scores above already
+    // carry.
+    if (!worthLookingForDetour(trouble)) return scored;
 
     // One spot per place: two drivers reporting the same accident is one
     // area to avoid, not two overlapping ones eating the request's limit.

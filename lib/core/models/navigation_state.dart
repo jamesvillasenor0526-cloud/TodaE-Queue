@@ -398,6 +398,33 @@ double incidentDelaySeconds(ReportType type) => switch (type) {
   ReportType.trafficClear => 0,
 };
 
+/// The delay one report adds to a route it sits on.
+///
+/// A corroborated report is trusted more, up to double weight — but a lone
+/// report still counts for something. Shared by [scoreRoute] and
+/// [worthLookingForDetour] so the two can never disagree about what a
+/// report costs.
+double reportDelaySeconds(RoadReport r) {
+  final confidence = (1 + r.confirmations.clamp(0, 4) * 0.25).clamp(1.0, 2.0);
+  return incidentDelaySeconds(r.type) * confidence;
+}
+
+/// Whether the reports ahead are worth asking the router to go around.
+///
+/// Every detour lookup is a request against a 2,500-a-day quota, and for a
+/// minor report the answer is already known: a mid-trip reroute has to save
+/// [kMinRerouteSaving], so a detour around that much delay or less can never
+/// be taken unless going round costs nothing at all. A lone road hazard is
+/// modelled at 60 s; asking TomTom about it spent a request to learn that
+/// the 63 s way round the rotonda was not worth it.
+///
+/// Delays are summed, not judged one by one: three hazards on the same road
+/// cost three minutes, and that is worth looking at.
+bool worthLookingForDetour(Iterable<RoadReport> avoidable) {
+  final total = avoidable.fold(0.0, (sum, r) => sum + reportDelaySeconds(r));
+  return total > kMinRerouteSaving.inSeconds;
+}
+
 /// An incident this close to the driver is level with them, not ahead.
 ///
 /// Something you are already alongside cannot be avoided by rerouting, and
@@ -468,10 +495,7 @@ RouteScore scoreRoute(
         (alreadyMeasured?.call(r) ?? false)) {
       continue;
     }
-    // A corroborated report is trusted more, up to double weight — but a
-    // lone report still counts for something.
-    final confidence = (1 + r.confirmations.clamp(0, 4) * 0.25).clamp(1.0, 2.0);
-    penalty += incidentDelaySeconds(r.type) * confidence;
+    penalty += reportDelaySeconds(r);
   }
   return RouteScore(
     route: route,

@@ -1,8 +1,9 @@
-/// The driver's live navigation strip.
+/// The driver's navigation strip under the trip card.
 ///
-/// This is where the navigation loop actually runs: GPS fixes come in, the
-/// shared trip record is updated, the route is re-checked against reported
-/// conditions, and a reroute is applied when one is genuinely worth it.
+/// One view of [LiveNavigation], which owns the GPS and the route; the
+/// full-screen [LiveNavigationScreen] is another. This panel holds the
+/// session open while a trip is on screen, and offers the way into
+/// full-screen navigation.
 ///
 /// It deliberately does **not** touch the trip state machine. When the
 /// driver arrives it says so and offers the action; pressing it calls
@@ -14,17 +15,16 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:geolocator/geolocator.dart';
-import 'package:latlong2/latlong.dart';
 
 import '../../../config/theme.dart';
+import '../../../core/models/live_route.dart';
 import '../../../core/models/navigation_state.dart';
 import '../../../core/models/road_report.dart';
 import '../../../core/models/trip_state.dart';
-import '../../../core/models/voice_guidance.dart';
-import '../../../core/services/navigation_service.dart';
 import '../../../core/services/voice_service.dart';
 import '../../shared/reports/quick_report_sheet.dart';
+import 'live_navigation.dart';
+import 'live_navigation_screen.dart';
 
 class NavigationPanel extends StatefulWidget {
   const NavigationPanel({
@@ -43,212 +43,52 @@ class NavigationPanel extends StatefulWidget {
 }
 
 class _NavigationPanelState extends State<NavigationPanel> {
-  StreamSubscription<Position>? _positions;
-  LatLng? _position;
-  RouteScore? _route;
-  RouteChoices? _choices;
-  String? _banner;
-  bool _working = false;
-
-  /// Guards against a slow reroute overlapping the next GPS fix.
-  bool _busyRouting = false;
-
-  /// Decides what to say. Held per panel so muting, or finishing a leg,
-  /// clears what has already been announced.
-  final VoiceGuide _guide = VoiceGuide();
+  final LiveNavigation _nav = LiveNavigation.instance;
 
   NavigationPhase get _phase => NavigationPhase.forTrip(widget.trip.trip);
-
-  LatLng? get _target =>
-      NavigationService.targetFor(widget.trip, widget.booking);
 
   @override
   void initState() {
     super.initState();
-    _start();
-    VoiceService.instance.load();
+    // The session owns the GPS and the route; this panel is one view of it,
+    // and the full-screen navigation is another.
+    _nav.hold(
+      bookingId: widget.bookingId,
+      trip: widget.trip,
+      booking: widget.booking,
+    );
   }
 
   @override
   void didUpdateWidget(covariant NavigationPanel old) {
     super.didUpdateWidget(old);
-    // A new leg (pickup → destination) needs a fresh route, not the old one.
-    if (old.trip.trip != widget.trip.trip) {
-      NavigationService.instance.reset();
-      _route = null;
-      // The run to the destination may repeat turns from the run to the
-      // pickup, and they need saying again.
-      _guide.reset();
-      VoiceService.instance.stop();
-      if (_phase.isNavigating) _recalculate();
-    }
+    _nav.update(widget.trip, widget.booking);
   }
 
   @override
   void dispose() {
-    _positions?.cancel();
-    // Nothing should still be talking about a route the driver has left.
-    VoiceService.instance.stop();
+    _nav.release();
     super.dispose();
-  }
-
-  Future<void> _start() async {
-    var permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-    if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) {
-      return;
-    }
-
-    _positions =
-        Geolocator.getPositionStream(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            distanceFilter: 10,
-          ),
-        ).listen((p) => _onFix(LatLng(p.latitude, p.longitude)));
-
-    // The stream only emits after the driver has moved [distanceFilter]
-    // metres, so a phone sitting still produces nothing at all — and a
-    // driver waiting at a terminal for a booking is exactly that. Without
-    // this seed the panel stays on "Getting your route…" indefinitely.
-    await _seedPosition();
-  }
-
-  /// Establishes a first position without waiting for movement.
-  ///
-  /// Tries the last known fix first because it returns instantly, then asks
-  /// for a fresh one; either is enough to start routing.
-  Future<void> _seedPosition() async {
-    if (_position != null) return;
-    try {
-      final cached = await Geolocator.getLastKnownPosition();
-      if (cached != null && mounted && _position == null) {
-        await _onFix(LatLng(cached.latitude, cached.longitude));
-      }
-    } catch (_) {
-      // No cached fix on this device yet; the live one below covers it.
-    }
-
-    try {
-      final fresh = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-        ),
-      ).timeout(const Duration(seconds: 12));
-      if (mounted) await _onFix(LatLng(fresh.latitude, fresh.longitude));
-    } catch (_) {
-      // Indoors or GPS denied. The panel keeps showing that it is still
-      // working on the route rather than claiming a false one.
-    }
-  }
-
-  Future<void> _onFix(LatLng position) async {
-    if (!mounted) return;
-    setState(() => _position = position);
-
-    final target = _target;
-    if (target == null || !_phase.isNavigating) return;
-    if (_busyRouting) return;
-    _busyRouting = true;
-
-    try {
-      final reason = await NavigationService.instance.onDriverMoved(
-        bookingId: widget.bookingId,
-        position: position,
-        target: target,
-        phase: _phase,
-      );
-      if (!mounted) return;
-      setState(() {
-        _route = NavigationService.instance.currentRoute;
-        _choices = NavigationService.instance.choices;
-        if (reason != RerouteReason.none) _banner = reason.message;
-      });
-      if (reason != RerouteReason.none) {
-        // Clear the banner after it has been read, so it does not sit there
-        // for the rest of the trip.
-        Future.delayed(const Duration(seconds: 6), () {
-          if (mounted) setState(() => _banner = null);
-        });
-      }
-      _announce(reason);
-    } finally {
-      _busyRouting = false;
-    }
-  }
-
-  /// Speaks the next cue, if there is one and the driver wants to hear it.
-  ///
-  /// Output only: nothing here can change the route, the trip or the
-  /// payment. If the speaker is muted or missing, the drive is unaffected.
-  void _announce(RerouteReason reason) {
-    final route = _route;
-    if (route == null || !VoiceService.instance.enabled) return;
-
-    final line = _guide.update(
-      turn: route.route.upcoming,
-      now: DateTime.now(),
-      reroute: reason,
-      ahead: groupIncidents(route.incidentsOnRoute, now: DateTime.now()),
-    );
-    if (line != null) VoiceService.instance.speak(line);
-  }
-
-  Future<void> _recalculate() async {
-    final position = _position;
-    final target = _target;
-    if (position == null || target == null) return;
-
-    setState(() => _working = true);
-    final score = await NavigationService.instance.startLeg(
-      bookingId: widget.bookingId,
-      from: position,
-      to: target,
-    );
-    if (!mounted) return;
-    setState(() {
-      _route = score;
-      _choices = NavigationService.instance.choices;
-      _working = false;
-    });
-  }
-
-  /// Switches to the route the driver picked instead of the recommendation.
-  Future<void> _useRoute(RouteScore route) async {
-    final position = _position;
-    if (position == null) return;
-
-    setState(() => _working = true);
-    await NavigationService.instance.useRoute(
-      bookingId: widget.bookingId,
-      route: route,
-      from: position,
-    );
-    if (!mounted) return;
-    setState(() {
-      _route = route;
-      _working = false;
-    });
   }
 
   @override
   Widget build(BuildContext context) {
     if (!_phase.isNavigating) return _PhaseNotice(phase: _phase);
+    return ListenableBuilder(listenable: _nav, builder: _buildLive);
+  }
 
-    final route = _route;
-    final position = _position;
-    final target = _target;
-
-    final arrived =
-        position != null && target != null && hasArrived(position, target);
+  Widget _buildLive(BuildContext context, Widget? _) {
+    final route = _nav.route;
+    final position = _nav.position;
+    final remaining = _nav.remaining;
+    final metres = _nav.remainingMeters;
+    final upcoming = _nav.upcoming;
+    final choices = _nav.choices;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (_banner != null) _Banner(text: _banner!),
+        if (_nav.banner != null) _Banner(text: _nav.banner!),
         Container(
           padding: const EdgeInsets.all(AppSpacing.md),
           decoration: BoxDecoration(
@@ -275,7 +115,7 @@ class _NavigationPanelState extends State<NavigationPanel> {
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                   ),
-                  if (_working)
+                  if (_nav.working)
                     const SizedBox(
                       width: 14,
                       height: 14,
@@ -286,7 +126,7 @@ class _NavigationPanelState extends State<NavigationPanel> {
               ),
               const SizedBox(height: AppSpacing.sm),
 
-              if (arrived)
+              if (_nav.arrived)
                 // The prompt only tells the driver they are here. Advancing
                 // the trip stays a deliberate action elsewhere in the UI.
                 const _ArrivedNotice()
@@ -296,10 +136,14 @@ class _NavigationPanelState extends State<NavigationPanel> {
                   style: TextStyle(color: AppTheme.textMuted),
                 )
               else ...[
-                _EtaRow(score: route, position: position),
-                if (route.route.upcoming != null) ...[
+                _EtaRow(
+                  remaining: remaining ?? Duration.zero,
+                  meters: metres ?? 0,
+                  estimate: route.isEstimate,
+                ),
+                if (upcoming != null) ...[
                   const SizedBox(height: AppSpacing.sm),
-                  _NextTurn(turn: route.route.upcoming!),
+                  _NextTurn(turn: upcoming),
                 ],
                 if (!route.route.isRealRoute) ...[
                   const SizedBox(height: AppSpacing.sm),
@@ -309,38 +153,66 @@ class _NavigationPanelState extends State<NavigationPanel> {
                   const SizedBox(height: AppSpacing.sm),
                   _AheadWarning(reports: route.incidentsOnRoute),
                 ],
-                if (_choices?.hasAlternative ?? false) ...[
+                if (choices?.hasAlternative ?? false) ...[
                   const SizedBox(height: AppSpacing.sm),
                   _AlternativeOffer(
-                    choices: _choices!,
+                    choices: choices!,
                     active: route,
-                    onUse: _useRoute,
+                    onUse: _nav.useRoute,
                   ),
                 ],
               ],
 
               const SizedBox(height: AppSpacing.md),
-              SizedBox(
-                height: 48,
-                child: OutlinedButton.icon(
-                  onPressed: () => showQuickReportSheet(
-                    context,
-                    tripId: widget.bookingId,
-                    at: _position,
-                  ),
-                  icon: const Icon(Icons.add_alert),
-                  label: const Text(
-                    'Report',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
+              Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 48,
+                      child: FilledButton.icon(
+                        onPressed: route == null
+                            ? null
+                            : () => LiveNavigationScreen.open(context),
+                        icon: const Icon(Icons.navigation),
+                        label: const Text(
+                          'Navigate',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppTheme.warning,
-                    side: const BorderSide(color: AppTheme.warning, width: 2),
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    child: SizedBox(
+                      height: 48,
+                      child: OutlinedButton.icon(
+                        onPressed: () => showQuickReportSheet(
+                          context,
+                          tripId: widget.bookingId,
+                          at: position,
+                        ),
+                        icon: const Icon(Icons.add_alert),
+                        label: const Text(
+                          'Report',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppTheme.warning,
+                          side: const BorderSide(
+                            color: AppTheme.warning,
+                            width: 2,
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
             ],
           ),
@@ -351,15 +223,17 @@ class _NavigationPanelState extends State<NavigationPanel> {
 }
 
 class _EtaRow extends StatelessWidget {
-  const _EtaRow({required this.score, required this.position});
-  final RouteScore score;
-  final LatLng position;
+  const _EtaRow({
+    required this.remaining,
+    required this.meters,
+    required this.estimate,
+  });
+  final Duration remaining;
+  final double meters;
+  final bool estimate;
 
   @override
   Widget build(BuildContext context) {
-    final remaining = remainingDuration(score, position);
-    final metres = remainingMeters(score.route, position);
-
     return Row(
       children: [
         Text(
@@ -376,15 +250,13 @@ class _EtaRow extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                formatDistance(metres),
+                formatDistance(meters),
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
               Text(
                 // Said plainly, because the delay part is this app's own
                 // estimate rather than measured traffic.
-                score.isEstimate
-                    ? 'Includes reported delays'
-                    : 'Clear route',
+                estimate ? 'Includes reported delays' : 'Clear route',
                 style: const TextStyle(
                   fontSize: 11,
                   color: AppTheme.textMuted,
@@ -513,9 +385,7 @@ class _AlternativeOffer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final alternative = choices.alternative;
-    if (alternative == null) return const SizedBox.shrink();
-
+    if (!choices.hasAlternative) return const SizedBox.shrink();
     final onRecommended = active.route.sameRouteAs(choices.recommended.route);
 
     return Container(
@@ -545,17 +415,28 @@ class _AlternativeOffer extends StatelessWidget {
           const SizedBox(height: AppSpacing.sm),
           _RouteOption(
             score: choices.recommended,
-            title: 'Recommended',
+            title: 'Fastest',
             selected: onRecommended,
             onUse: onRecommended ? null : () => onUse(choices.recommended),
           ),
-          const SizedBox(height: AppSpacing.xs),
-          _RouteOption(
-            score: alternative,
-            title: 'Alternative',
-            selected: !onRecommended,
-            onUse: !onRecommended ? null : () => onUse(alternative),
-          ),
+          for (final alt in choices.alternatives) ...[
+            const SizedBox(height: AppSpacing.xs),
+            () {
+              final selected = active.route.sameRouteAs(alt.route);
+              return _RouteOption(
+                score: alt,
+                // The real difference, against the fastest — the same words
+                // the labels on the map use.
+                title: timeDifferenceLabel(
+                  alternativeSeconds: alt.adjustedSeconds,
+                  activeSeconds: choices.recommended.adjustedSeconds,
+                  estimate: alt.isEstimate,
+                ),
+                selected: selected,
+                onUse: selected ? null : () => onUse(alt),
+              );
+            }(),
+          ],
         ],
       ),
     );

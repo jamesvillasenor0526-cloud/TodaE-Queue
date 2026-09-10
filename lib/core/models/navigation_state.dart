@@ -334,18 +334,28 @@ class RouteScore {
   }
 }
 
-/// Two routes offered to the driver, best first.
+/// The routes offered to the driver, best first.
 ///
-/// Deliberately capped: the spec asks for a recommendation and at most one
-/// alternative, because a driver choosing between five lines on a phone is
-/// worse off than one being given a good answer.
+/// Capped at [kMaxAlternatives]: the live-navigation spec asks for the
+/// fastest route plus slower complete alternatives ("2 min slower", "5 min
+/// slower"), the way Apple and Google Maps show them. More than that is a
+/// driver choosing between five lines on a phone, which is worse than being
+/// given a good answer.
 class RouteChoices {
   final RouteScore recommended;
-  final RouteScore? alternative;
 
-  const RouteChoices({required this.recommended, this.alternative});
+  /// Slower complete routes, quickest first.
+  final List<RouteScore> alternatives;
 
-  bool get hasAlternative => alternative != null;
+  const RouteChoices({required this.recommended, this.alternatives = const []});
+
+  /// The best of the alternatives, for places that show only one.
+  RouteScore? get alternative => alternatives.isEmpty ? null : alternatives.first;
+
+  /// Every route on offer, recommended first.
+  List<RouteScore> get all => [recommended, ...alternatives];
+
+  bool get hasAlternative => alternatives.isNotEmpty;
 
   /// How much longer the alternative takes. Negative would mean it is
   /// quicker, which cannot happen since the quicker one is recommended.
@@ -381,6 +391,7 @@ RouteChoices? buildChoices(
   List<RouteScore> candidates, {
   Duration minDifference = const Duration(seconds: 30),
   double maxDetourFraction = kMaxDetourFraction,
+  int maxAlternatives = kMaxAlternatives,
 }) {
   final best = chooseBest(candidates);
   if (best == null) return null;
@@ -391,7 +402,7 @@ RouteChoices? buildChoices(
       best.isBlocked || best.incidentsOnRoute.isNotEmpty;
   final ceiling = best.adjustedSeconds * (1 + maxDetourFraction);
 
-  RouteScore? alternative;
+  final eligible = <RouteScore>[];
   for (final c in candidates) {
     // Identity is right here: the best route is one of these objects. The
     // value comparison is for the UI, which sees rebuilt objects.
@@ -402,13 +413,20 @@ RouteChoices? buildChoices(
       continue;
     }
     if (!recommendedHasTrouble && c.adjustedSeconds > ceiling) continue;
-    if (alternative == null ||
-        c.adjustedSeconds < alternative.adjustedSeconds) {
-      alternative = c;
-    }
+    // The same road fetched twice is already dropped where candidates are
+    // gathered (NavigationService._scoredCandidates), so it is not re-checked
+    // here by geometry.
+    eligible.add(c);
   }
-  return RouteChoices(recommended: best, alternative: alternative);
+  eligible.sort((a, b) => a.adjustedSeconds.compareTo(b.adjustedSeconds));
+  return RouteChoices(
+    recommended: best,
+    alternatives: eligible.take(maxAlternatives).toList(),
+  );
 }
+
+/// How many slower routes are offered beside the fastest.
+const int kMaxAlternatives = 2;
 
 /// How close to the line a report has to be to count as "on this route".
 const double kIncidentOnRouteMeters = 45;

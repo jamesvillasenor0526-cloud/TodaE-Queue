@@ -23,6 +23,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+import '../models/live_route.dart' show findLoop, throughPointAfter;
 import '../models/navigation_state.dart';
 import '../models/traffic_segment.dart' show nearestOnWay;
 import 'tomtom_router.dart';
@@ -93,7 +94,11 @@ class NavigationRouter {
     for (final offset in const [0.12, -0.12, 0.22, -0.22, 0.35, -0.35]) {
       if (routes.length > maxAlternatives) break;
       final waypoint = _perpendicularOffset(from, to, pivot, span * offset);
-      final candidate = await _request([from, waypoint, to]);
+      final candidate = await _withoutLoop(
+        from,
+        to,
+        await _request([from, waypoint, to]),
+      );
       if (candidate == null) continue;
 
       // A detour half again as long as the direct route is not a choice a
@@ -144,7 +149,11 @@ class NavigationRouter {
     for (final offset in const [0.12, -0.12, 0.22, -0.22, 0.35, -0.35]) {
       if (around.length >= maxRoutes) break;
       final waypoint = _perpendicularOffset(from, to, avoid.first, span * offset);
-      final candidate = await _request([from, waypoint, to]);
+      final candidate = await _withoutLoop(
+        from,
+        to,
+        await _request([from, waypoint, to]),
+      );
       if (candidate == null) continue;
       // Twice the direct distance is a tour of the district, not a detour.
       if (candidate.distanceMeters > direct.distanceMeters * 2) continue;
@@ -153,6 +162,28 @@ class NavigationRouter {
       around.add(candidate);
     }
     return (direct: direct, around: around);
+  }
+
+  /// [route] with any out-and-back removed — by asking again, not by
+  /// editing the geometry.
+  ///
+  /// A route forced through a point can go up a dead-end side street to
+  /// reach it and come straight back. Cutting the spur out of the line would
+  /// leave turn instructions for a street no longer on it, so instead the
+  /// router is asked for the same way round through a point on the road the
+  /// route rejoins, which it can pass without the spur. Anything that still
+  /// loops is dropped: a route that tells a driver to go up a street and
+  /// back is not one to offer.
+  Future<NavRoute?> _withoutLoop(LatLng from, LatLng to, NavRoute? route) async {
+    if (route == null) return null;
+    final loop = findLoop(route.points);
+    if (loop == null) return route;
+
+    final through = throughPointAfter(route.points, loop);
+    if (through == null) return null;
+    final retry = await _request([from, through, to]);
+    if (retry == null || findLoop(retry.points) != null) return null;
+    return retry;
   }
 
   Future<NavRoute?> _request(List<LatLng> waypoints) async {

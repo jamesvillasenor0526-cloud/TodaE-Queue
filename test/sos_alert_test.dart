@@ -1,0 +1,159 @@
+/// Tests for SOS alerts: status, compatibility with alerts older versions
+/// wrote, and — mostly — what the person in trouble is told.
+library;
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:toda_equeue_plus/core/models/sos_alert.dart';
+
+DateTime? _date(dynamic v) => v is DateTime ? v : null;
+
+SosAlert alert(Map<String, dynamic> data) =>
+    SosAlert.fromMap('a1', data, toDate: _date);
+
+final now = DateTime(2026, 9, 11, 12, 0);
+
+void main() {
+  group('status', () {
+    test('open means someone still has to act', () {
+      expect(SosStatus.active.isOpen, isTrue);
+      expect(SosStatus.acknowledged.isOpen, isTrue);
+      expect(SosStatus.resolved.isOpen, isFalse);
+      expect(SosStatus.cancelled.isOpen, isFalse);
+    });
+
+    test('an unknown status is treated as open, never hidden', () {
+      // Wrongly showing an alert as live is recoverable; hiding one is not.
+      expect(SosStatus.fromWire('something-new'), SosStatus.active);
+      expect(SosStatus.fromWire(null), SosStatus.active);
+    });
+  });
+
+  group('alerts written by the old app still read', () {
+    // The 50 alerts in the database carry only these fields.
+    final old = {
+      'userId': 'u1',
+      'userName': 'Erikka',
+      'userRole': 'passenger',
+      'latitude': null,
+      'longitude': null,
+      'status': 'resolved',
+      'triggeredAt': DateTime(2026, 8, 31, 7, 13),
+      'resolvedAt': null,
+    };
+
+    test('without a location', () {
+      final a = alert(old);
+      expect(a.hasLocation, isFalse);
+      expect(a.status, SosStatus.resolved);
+      expect(a.trip, isNull);
+      expect(a.userPhone, isNull);
+    });
+
+    test('an old "active" alert is open', () {
+      expect(alert({...old, 'status': 'active'}).status.isOpen, isTrue);
+    });
+  });
+
+  group('what the person who raised it is told', () {
+    test('never "help is on the way" before anyone has responded', () {
+      // The old screen said it the instant the button was pressed, while no
+      // one had been notified at all.
+      final m = sosStatusMessage(alert({'status': 'active'}));
+      expect(m.title.toLowerCase(), isNot(contains('help')));
+      expect(m.detail.toLowerCase(), isNot(contains('on the way')));
+      expect(m.detail, contains('Waiting'));
+      expect(m.detail, contains('911'));
+    });
+
+    test('once an admin responds, says who', () {
+      final m = sosStatusMessage(
+        alert({'status': 'acknowledged', 'acknowledgedBy': 'Admin Reyes'}),
+      );
+      expect(m.title, contains('seen'));
+      expect(m.detail, contains('Admin Reyes'));
+    });
+
+    test('acknowledged without a name still says a human is on it', () {
+      final m = sosStatusMessage(alert({'status': 'acknowledged'}));
+      expect(m.detail, contains('responding'));
+    });
+
+    test('cancelling is not reported as an admin resolving it', () {
+      expect(
+        sosStatusMessage(alert({'status': 'cancelled'})).title,
+        isNot(sosStatusMessage(alert({'status': 'resolved'})).title),
+      );
+    });
+  });
+
+  group('describing the location', () {
+    test('no location says to tell responders where you are', () {
+      expect(
+        sosLocationLine(alert({'status': 'active'}), now),
+        contains('say where you are'),
+      );
+    });
+
+    test('a fresh reading says how precise and how recent', () {
+      final line = sosLocationLine(
+        alert({
+          'status': 'active',
+          'latitude': 14.95,
+          'longitude': 120.9,
+          'locationAccuracy': 12.4,
+          'locationAt': now.subtract(const Duration(seconds: 20)),
+        }),
+        now,
+      );
+      expect(line, contains('within 12 m'));
+      expect(line, contains('just now'));
+    });
+
+    test('an older reading says how old', () {
+      final line = sosLocationLine(
+        alert({
+          'status': 'active',
+          'latitude': 14.95,
+          'longitude': 120.9,
+          'locationAt': now.subtract(const Duration(minutes: 4)),
+        }),
+        now,
+      );
+      expect(line, contains('4 min ago'));
+    });
+  });
+
+  group('the trip', () {
+    test('names the vehicle and driver for responders', () {
+      final a = alert({
+        'status': 'active',
+        'trip': {
+          'bookingId': 'b1',
+          'driverName': 'Juan Dela Cruz',
+          'plateNumber': 'ABC 123',
+          'bodyNumber': '45',
+        },
+      });
+      expect(a.trip!.vehicleLine, 'Plate ABC 123 · Body #45 · Driver Juan Dela Cruz');
+    });
+
+    test('says only what is known', () {
+      final a = alert({
+        'status': 'active',
+        'trip': {'bookingId': 'b1', 'driverName': 'Juan', 'plateNumber': ' '},
+      });
+      expect(a.trip!.vehicleLine, 'Driver Juan');
+    });
+
+    test('a malformed trip is ignored rather than crashing', () {
+      expect(alert({'status': 'active', 'trip': 'oops'}).trip, isNull);
+      expect(alert({'status': 'active', 'trip': {'driverName': 'x'}}).trip, isNull);
+    });
+  });
+
+  test('a last known position older than ten minutes is not sent', () {
+    // Several kilometres at tricycle speed — responders would go to the
+    // wrong place. Pinned so the rule is not loosened by accident.
+    expect(kMaxLastKnownAge, const Duration(minutes: 10));
+  });
+}

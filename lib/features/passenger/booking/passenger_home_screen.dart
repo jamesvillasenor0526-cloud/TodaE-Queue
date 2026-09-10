@@ -12,7 +12,6 @@ import 'pickup_location_screen.dart';
 import 'destination_picker_screen.dart';
 import '../../../widgets/shimmer_loading.dart';
 import '../../../widgets/state_views.dart';
-import 'package:flutter/services.dart';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import '../../../core/services/cloudinary_service.dart';
@@ -21,6 +20,7 @@ import 'package:geolocator/geolocator.dart';
 import '../../../config/theme_controller.dart';
 import '../../../core/services/routing_service.dart';
 import '../../shared/reports/my_reports_screen.dart';
+import '../../shared/sos/sos_button.dart';
 
 class PassengerHomeScreen extends StatefulWidget {
   const PassengerHomeScreen({super.key});
@@ -108,16 +108,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
             child: const Icon(Icons.map, color: Colors.white),
           ),
           const SizedBox(height: 12),
-          FloatingActionButton.extended(
-            heroTag: 'sos',
-            onPressed: () {
-              HapticFeedback.heavyImpact(); // ← ADD THIS
-              Navigator.pushNamed(context, AppRoutes.sos);
-            },
-            backgroundColor: AppTheme.errorRed,
-            icon: const Icon(Icons.sos, color: Colors.white),
-            label: const Text('SOS', style: TextStyle(color: Colors.white)),
-          ),
+          const SosButton(),
         ],
       ),
     );

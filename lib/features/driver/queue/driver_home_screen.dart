@@ -30,6 +30,7 @@ import '../../shared/reports/report_sheet.dart';
 import '../navigation/navigation_panel.dart';
 import '../../shared/navigation/trip_route_layer.dart';
 import '../../shared/reports/my_reports_screen.dart';
+import '../../shared/sos/sos_button.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   const DriverHomeScreen({super.key});
@@ -546,16 +547,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        heroTag: 'sos',
-        onPressed: () {
-          HapticFeedback.heavyImpact(); // ← ADD THIS
-          Navigator.pushNamed(context, AppRoutes.sos);
-        },
-        backgroundColor: AppTheme.errorRed,
-        icon: const Icon(Icons.sos, color: Colors.white),
-        label: const Text('SOS', style: TextStyle(color: Colors.white)),
-      ),
+      floatingActionButton: const SosButton(),
     );
   }
 }

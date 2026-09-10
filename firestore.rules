@@ -95,10 +95,39 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Safety-critical; left as permissive as before apart from delete.
+    // SOS alerts.
+    //
+    // Raised by the person they are about, kept current and called off by
+    // them, acknowledged and resolved by an admin. Until now any signed-in
+    // user could rewrite any alert — resolve someone else's, mark it as
+    // answered, or change whose it was.
+    //
+    // Creating stays as open as it safely can: an SOS must never be refused
+    // for a missing optional field.
     match /sosAlerts/{alertId} {
       allow read: if signedIn();
-      allow create, update: if signedIn();
+
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'active';
+
+      // The owner may update their own alert — its location while it is open,
+      // the trip attached a moment after raising it — and call it off. Older
+      // app versions call it off by writing 'resolved', so that stays allowed.
+      // They may not claim an admin has responded, nor hand the alert to
+      // someone else. Admins may update any alert.
+      allow update: if (signedIn()
+          && resource.data.userId == request.auth.uid
+          && request.resource.data.userId == request.auth.uid
+          && (request.resource.data.status == resource.data.status
+              || request.resource.data.status in ['cancelled', 'resolved'])
+          && request.resource.data.get('acknowledgedBy', null)
+               == resource.data.get('acknowledgedBy', null)
+          && request.resource.data.get('resolvedBy', null)
+               == resource.data.get('resolvedBy', null))
+        || isAdmin();
+
+      // A record of who asked for help, and when, is never erased.
       allow delete: if false;
     }
 

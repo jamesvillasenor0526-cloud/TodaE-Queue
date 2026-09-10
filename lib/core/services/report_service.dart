@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../models/location_fix.dart';
 import '../models/road_report.dart';
 import 'cloudinary_service.dart';
 import 'traffic_incident_service.dart';
@@ -132,7 +133,19 @@ class ReportService {
   ///
   /// A report without a location is useless, so callers treat null as a hard
   /// failure rather than filing a pin at (0, 0).
-  Future<LatLng?> currentLocation() async {
+  Future<LatLng?> currentLocation() async => (await currentFix())?.at;
+
+  /// Where the device is, and how old that reading is.
+  ///
+  /// Android can answer a location request with a cached fix, and a cached
+  /// fix can be from before the driver moved: filing on the emulator right
+  /// after moving it showed the previous spot, 3 km away. Submitted, that
+  /// report would have landed on the wrong road — and, being next to the
+  /// reporter's own earlier one, been silently merged into it. So a stale
+  /// answer triggers a wait for a genuinely new reading. If none arrives the
+  /// stale one is still used — a safety report must not be blocked by a slow
+  /// GPS — but its age is returned so the sheet can say so.
+  Future<LocationFix?> currentFix() async {
     try {
       var permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
@@ -142,12 +155,29 @@ class ReportService {
           permission == LocationPermission.deniedForever) {
         return null;
       }
-      final pos = await Geolocator.getCurrentPosition(
+      var pos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
         ),
       ).timeout(const Duration(seconds: 8));
-      return LatLng(pos.latitude, pos.longitude);
+
+      if (isStaleFix(pos.timestamp, DateTime.now())) {
+        try {
+          pos = await Geolocator.getPositionStream(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.high,
+              distanceFilter: 0,
+            ),
+          ).firstWhere((p) => !isStaleFix(p.timestamp, DateTime.now()))
+              .timeout(const Duration(seconds: 6));
+        } catch (_) {
+          // No fresh reading in time; keep the stale one and say how old.
+        }
+      }
+      return LocationFix(
+        at: LatLng(pos.latitude, pos.longitude),
+        takenAt: pos.timestamp,
+      );
     } catch (_) {
       return null;
     }

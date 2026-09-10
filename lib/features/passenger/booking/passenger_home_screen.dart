@@ -20,6 +20,7 @@ import '../../../core/services/geocoding_service.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../../config/theme_controller.dart';
 import '../../../core/services/routing_service.dart';
+import '../../shared/reports/my_reports_screen.dart';
 
 class PassengerHomeScreen extends StatefulWidget {
   const PassengerHomeScreen({super.key});
@@ -2380,6 +2381,25 @@ class _ProfileTabState extends State<_ProfileTab> {
                     subtitle: Text(data?['role'] ?? 'passenger'),
                   ),
                 ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // My road reports — the dependable way to take one down; see
+            // MyReportsScreen for why the map alone was not enough.
+            Card(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: ListTile(
+                leading: const Icon(Icons.flag_outlined, color: AppTheme.warning),
+                title: const Text(
+                  'My road reports',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                subtitle: const Text('See what you reported, or take it down'),
+                trailing: const Icon(Icons.chevron_right, size: 18),
+                onTap: () => MyReportsScreen.open(context),
               ),
             ),
             const SizedBox(height: 16),

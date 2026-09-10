@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../config/theme.dart';
+import '../../../core/models/location_fix.dart';
 import '../../../core/models/road_report.dart';
 import '../../../core/services/report_service.dart';
 
@@ -41,6 +42,10 @@ class _ReportSheetState extends State<_ReportSheet> {
   File? _photo;
 
   LatLng? _location;
+
+  /// When [_location] was measured. Null for a location handed in, which is
+  /// where the driver chose rather than a reading that can go stale.
+  DateTime? _fixTakenAt;
   bool _locating = true;
   bool _submitting = false;
   String? _error;
@@ -68,10 +73,12 @@ class _ReportSheetState extends State<_ReportSheet> {
       _locating = true;
       _error = null;
     });
-    final loc = await ReportService.instance.currentLocation();
+    final fix = await ReportService.instance.currentFix();
+    final loc = fix?.at;
     if (!mounted) return;
     setState(() {
       _location = loc;
+      _fixTakenAt = fix?.takenAt;
       _locating = false;
       // A report with no location can't be placed on the map, so this is a
       // hard stop rather than a warning.
@@ -287,6 +294,7 @@ class _ReportSheetState extends State<_ReportSheet> {
                   _LocationRow(
                     locating: _locating,
                     location: _location,
+                    takenAt: _fixTakenAt,
                     onRetry: _resolveLocation,
                   ),
                   if (_error != null) ...[
@@ -468,10 +476,12 @@ class _LocationRow extends StatelessWidget {
     required this.locating,
     required this.location,
     required this.onRetry,
+    this.takenAt,
   });
 
   final bool locating;
   final LatLng? location;
+  final DateTime? takenAt;
   final VoidCallback onRetry;
 
   @override
@@ -497,6 +507,31 @@ class _LocationRow extends StatelessWidget {
           const SizedBox(width: AppSpacing.sm),
           const Expanded(child: Text('Location unavailable')),
           TextButton(onPressed: onRetry, child: const Text('Retry')),
+        ],
+      );
+    }
+    // A reading the GPS could not refresh in time. Still usable — a safety
+    // report must not be blocked by a slow fix — but the driver is told, and
+    // can try again, rather than filing on a road they have already left.
+    final taken = takenAt;
+    final now = DateTime.now();
+    if (taken != null && isStaleFix(taken, now)) {
+      return Row(
+        children: [
+          const Icon(
+            Icons.location_searching,
+            size: 18,
+            color: AppTheme.warning,
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              'Location from ${fixAgeLabel(now.difference(taken))} — '
+              'may not be where you are now',
+              style: const TextStyle(fontSize: 12, color: AppTheme.warning),
+            ),
+          ),
+          TextButton(onPressed: onRetry, child: const Text('Refresh')),
         ],
       );
     }

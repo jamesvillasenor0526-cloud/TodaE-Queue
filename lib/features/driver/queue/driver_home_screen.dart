@@ -29,6 +29,7 @@ import '../../shared/reports/report_map_layer.dart';
 import '../../shared/reports/report_sheet.dart';
 import '../navigation/navigation_panel.dart';
 import '../../shared/navigation/trip_route_layer.dart';
+import '../../shared/reports/my_reports_screen.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   const DriverHomeScreen({super.key});
@@ -3743,6 +3744,25 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
                     subtitle: Text(data?['role'] ?? 'passenger'),
                   ),
                 ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // My road reports — the dependable way to take one down; see
+            // MyReportsScreen for why the map alone was not enough.
+            Card(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: ListTile(
+                leading: const Icon(Icons.flag_outlined, color: AppTheme.warning),
+                title: const Text(
+                  'My road reports',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                subtitle: const Text('See what you reported, or take it down'),
+                trailing: const Icon(Icons.chevron_right, size: 18),
+                onTap: () => MyReportsScreen.open(context),
               ),
             ),
             const SizedBox(height: 16),

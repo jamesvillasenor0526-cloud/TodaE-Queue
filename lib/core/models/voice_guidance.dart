@@ -86,7 +86,10 @@ class VoiceGuide {
     if (reroute != RerouteReason.none && reroute != _lastReroute) {
       _lastReroute = reroute;
       return switch (reroute) {
-        RerouteReason.roadBlocked => 'Road closed ahead. Taking a new route.',
+        // Not "closed": this also fires for a confirmed accident or a
+        // fallen tree, and telling a driver the road is shut when it has a
+        // crash on it is a small lie they will notice.
+        RerouteReason.roadBlocked => 'Road blocked ahead. Taking a new route.',
         RerouteReason.fasterRoute => 'Taking a faster route.',
         RerouteReason.offRoute => 'Recalculating.',
         RerouteReason.none => null,

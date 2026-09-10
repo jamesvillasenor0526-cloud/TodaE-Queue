@@ -182,6 +182,31 @@ class NavRoute {
   /// top. Doing both would count the same congestion twice.
   bool get isTrafficAware => source == 'tomtom';
 
+  /// Source of a route found on OpenStreetMap's road network, with its
+  /// traffic-free time scaled to the traffic TomTom measured nearby.
+  static const String osmEstimateSource = 'osm-estimate';
+
+  /// Whether [durationSeconds] is this app's estimate rather than a router's
+  /// answer. Such a route is labelled "estimated", and every report on it
+  /// counts in full, since no measured traffic stands behind its time.
+  bool get hasEstimatedTime => source == osmEstimateSource;
+
+  /// This route with its traffic-free time scaled by [trafficFactor].
+  ///
+  /// For a way round that TomTom's map does not have. OSRM knows the road
+  /// but not the traffic on it; TomTom knows the traffic but not the road.
+  /// Scaling by how much slower TomTom found the direct road than OSRM did
+  /// is a model, and the result is labelled as one — but it makes the two
+  /// comparable, where an unscaled free-flow time would beat every
+  /// measured route and send drivers the long way for nothing.
+  NavRoute withTrafficEstimate(double trafficFactor) => NavRoute(
+    points: points,
+    distanceMeters: distanceMeters,
+    durationSeconds: durationSeconds * trafficFactor,
+    steps: steps,
+    source: osmEstimateSource,
+  );
+
   /// A straight line, used only when routing is unreachable. Flagged so the
   /// UI can say the route is unavailable rather than draw a fake road.
   factory NavRoute.straightLine(LatLng from, LatLng to) {
@@ -253,27 +278,30 @@ class RouteScore {
   /// Seconds added for the reported conditions.
   final double penaltySeconds;
 
+  /// Reports on this route that make it impassable, judged when it was
+  /// scored — see [blocksRoad]. Stored rather than derived, because whether
+  /// an accident blocks depends on its status at a given instant and this
+  /// class deliberately never reads the clock.
+  final List<RoadReport> blockers;
+
   const RouteScore({
     required this.route,
     required this.incidentsOnRoute,
     required this.penaltySeconds,
+    this.blockers = const [],
   });
 
   /// Free-flow duration plus the modelled delay.
   double get adjustedSeconds => route.durationSeconds + penaltySeconds;
 
-  /// True when reports moved the estimate, meaning the number is partly
-  /// this app's model rather than purely OSRM's. The UI says "estimated"
-  /// in that case rather than implying measured traffic.
-  bool get isEstimate => penaltySeconds > 0;
+  /// True when the number is partly this app's model rather than purely a
+  /// router's: reports moved it, or the route's own time was estimated from
+  /// traffic-free data. The UI says "estimated" rather than implying a
+  /// measurement.
+  bool get isEstimate => penaltySeconds > 0 || route.hasEstimatedTime;
 
   /// A route the driver should not be sent down at all.
-  ///
-  /// No trust check here: [incidentsOn] already dropped anything expired or
-  /// dismissed, judged against the same instant. Re-checking would reach for
-  /// the wall clock and could disagree with the list it is filtering.
-  bool get isBlocked =>
-      incidentsOnRoute.any((r) => r.type == ReportType.roadClosure);
+  bool get isBlocked => blockers.isNotEmpty;
 
   /// The worst thing reported on this route, for labelling the choice.
   ReportType? get worstIncident {
@@ -289,7 +317,14 @@ class RouteScore {
   /// Says "reported" rather than stating conditions as fact, because that is
   /// what this is — other people's reports, not a traffic measurement.
   String get conditionLabel {
-    if (isBlocked) return 'Road reported closed';
+    if (isBlocked) {
+      // Name what is in the way. "Road reported closed" for a crash told the
+      // driver something that was not true.
+      return switch (blockers.first.type) {
+        ReportType.roadClosure => 'Road reported closed',
+        final other => '${other.label} blocking the road',
+      };
+    }
     final worst = worstIncident;
     if (worst == null) return 'Nothing reported';
     final count = incidentsOnRoute.length;
@@ -398,6 +433,44 @@ double incidentDelaySeconds(ReportType type) => switch (type) {
   ReportType.trafficClear => 0,
 };
 
+/// How much slower measured traffic made a trip than a traffic-free
+/// estimate of it — the ratio used to put an OpenStreetMap route's time on
+/// the same footing as TomTom's.
+///
+/// Bounded, because it is computed from two different routers' routes that
+/// need not be the same road: a factor of 10 from a mismatched pair would
+/// make a way round look like an hour, and 0.1 would make it look free.
+/// Measured over Baliwag in evening traffic it came out at 2.09.
+double trafficFactor({
+  required double measuredSeconds,
+  required double freeFlowSeconds,
+}) {
+  if (measuredSeconds <= 0 || freeFlowSeconds <= 0) return 1;
+  return (measuredSeconds / freeFlowSeconds).clamp(0.5, 4.0);
+}
+
+/// Whether [r] makes the road impassable at [now], rather than just slow.
+///
+/// A blocked route loses to any usable one however long the way round, so
+/// this is deliberately narrow:
+///
+///   * A reported closure always blocks — that is what it says.
+///   * An accident or a fallen tree blocks once **confirmed** — by an admin,
+///     or by enough drivers agreeing. The report sheet describes both as
+///     "blocking the road", and a confirmed accident was being modelled as
+///     an 8-minute delay to drive through: the route went straight through
+///     one because the only way round was slower. A road you cannot pass is
+///     not made passable by the detour being long.
+///
+/// A single unverified accident still only costs time, so one mistaken or
+/// malicious report cannot send every driver in town the long way round.
+bool blocksRoad(RoadReport r, DateTime now) => switch (r.type) {
+  ReportType.roadClosure => true,
+  ReportType.accident ||
+  ReportType.fallenTree => r.statusAt(now) == IncidentStatus.confirmed,
+  _ => false,
+};
+
 /// The delay one report adds to a route it sits on.
 ///
 /// A corroborated report is trusted more, up to double weight — but a lone
@@ -501,6 +574,10 @@ RouteScore scoreRoute(
     route: route,
     incidentsOnRoute: on,
     penaltySeconds: penalty,
+    blockers: [
+      for (final r in on)
+        if (blocksRoad(r, now)) r,
+    ],
   );
 }
 
@@ -526,7 +603,8 @@ enum RerouteReason {
 
   String get message => switch (this) {
     RerouteReason.none => '',
-    RerouteReason.roadBlocked => 'Route updated — road reported closed ahead',
+    // Not "closed": this also fires for a confirmed accident or fallen tree.
+    RerouteReason.roadBlocked => 'Route updated — road blocked ahead',
     RerouteReason.fasterRoute => 'Route updated — avoiding reported delays',
     RerouteReason.offRoute => 'New route found',
   };

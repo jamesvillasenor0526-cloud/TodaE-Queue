@@ -171,7 +171,7 @@ void main() {
           now: now,
           reroute: RerouteReason.roadBlocked,
         ),
-        'Road closed ahead. Taking a new route.',
+        'Road blocked ahead. Taking a new route.',
       );
       expect(
         VoiceGuide().update(
@@ -220,7 +220,7 @@ void main() {
         now: now,
         reroute: RerouteReason.roadBlocked,
       );
-      expect(said, contains('Road closed'));
+      expect(said, contains('Road blocked'));
     });
   });
 

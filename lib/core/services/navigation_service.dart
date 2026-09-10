@@ -290,6 +290,10 @@ class NavigationService {
       // What is ahead on the road actually being driven, not only on the
       // fresh routes — that is the incident the driver is heading into.
       alsoAvoid: rescoredCurrent.incidentsOnRoute,
+      // Once the driver is on a way round, looking for another every 45 s
+      // would put several requests a minute on a free community server for
+      // an answer already in hand.
+      searchOsm: rescoredCurrent.isBlocked,
     );
     if (scored.isEmpty) return RerouteReason.none;
 
@@ -338,6 +342,7 @@ class NavigationService {
     _Conditions conditions,
     DateTime now, {
     List<RoadReport> alsoAvoid = const [],
+    bool searchOsm = true,
   }) async {
     final routes = await NavigationRouter.instance.routeWithAlternatives(
       from,
@@ -387,6 +392,43 @@ class NavigationService {
       if (d.isTrafficAware != best.route.isTrafficAware) continue;
       if (scored.any((s) => s.route.sameRouteAs(d))) continue;
       scored.add(conditions.score(d, now: now, from: from));
+    }
+
+    // TomTom avoids an area only where its own map has a way round. Where
+    // the way round is a barangay street it does not know, it hands back the
+    // same routes through the incident — and when the incident blocks the
+    // road, that sends the driver somewhere they cannot go. OpenStreetMap
+    // has those streets, so it is asked instead.
+    if (searchOsm && scored.every((s) => s.isBlocked)) {
+      final blockerSpots = <LatLng>[];
+      for (final s in scored) {
+        for (final r in s.blockers) {
+          if (blockerSpots.every((p) => distanceKm(p, r.location) > 0.1)) {
+            blockerSpots.add(r.location);
+          }
+        }
+      }
+      final osm = await NavigationRouter.instance.osmWaysAround(
+        from,
+        to,
+        avoid: blockerSpots,
+      );
+      final direct = osm.direct;
+      if (direct != null) {
+        final factor = trafficFactor(
+          measuredSeconds: best.route.durationSeconds,
+          freeFlowSeconds: direct.durationSeconds,
+        );
+        for (final way in osm.around) {
+          scored.add(
+            conditions.score(
+              way.withTrafficEstimate(factor),
+              now: now,
+              from: from,
+            ),
+          );
+        }
+      }
     }
     return scored;
   }

@@ -24,6 +24,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import '../models/navigation_state.dart';
+import '../models/traffic_segment.dart' show nearestOnWay;
 import 'tomtom_router.dart';
 
 class NavigationRouter {
@@ -103,6 +104,55 @@ class NavigationRouter {
       routes.add(candidate);
     }
     return routes;
+  }
+
+  /// Ways from [from] to [to] that stay clear of every point in [avoid],
+  /// found on OpenStreetMap's road network, plus OSRM's direct route for
+  /// calibrating their times.
+  ///
+  /// This exists because TomTom's map is missing roads OSM has — barangay
+  /// streets, which are exactly where tricycles drive. Asked to avoid a
+  /// confirmed accident on the road out of Calantipay, TomTom returned the
+  /// same three routes straight through it; even told to go via Ramos
+  /// Street, it drove through the accident to get there. OSRM found the way
+  /// round on Ramos Street, 257 m clear of it.
+  ///
+  /// Only routes that actually keep [clearanceMeters] from every point are
+  /// returned. A waypoint pushes a route into a corridor but does not stop
+  /// it passing the incident on the way there, and a "way round" that goes
+  /// through what it is going round is worse than none.
+  Future<({NavRoute? direct, List<NavRoute> around})> osmWaysAround(
+    LatLng from,
+    LatLng to, {
+    required List<LatLng> avoid,
+    double clearanceMeters = kIncidentOnRouteMeters,
+    int maxRoutes = 1,
+  }) async {
+    final direct = await _request([from, to]);
+    if (direct == null || avoid.isEmpty) return (direct: direct, around: <NavRoute>[]);
+
+    bool clearOfAll(NavRoute r) => avoid.every(
+      (a) =>
+          (nearestOnWay(r.points, a)?.distanceMeters ?? double.infinity) >
+          clearanceMeters,
+    );
+
+    final around = <NavRoute>[];
+    final span = _degreesBetween(from, to);
+    // Gentle offsets first, as for alternatives: the least contrived way
+    // round is the one a driver would actually take.
+    for (final offset in const [0.12, -0.12, 0.22, -0.22, 0.35, -0.35]) {
+      if (around.length >= maxRoutes) break;
+      final waypoint = _perpendicularOffset(from, to, avoid.first, span * offset);
+      final candidate = await _request([from, waypoint, to]);
+      if (candidate == null) continue;
+      // Twice the direct distance is a tour of the district, not a detour.
+      if (candidate.distanceMeters > direct.distanceMeters * 2) continue;
+      if (!clearOfAll(candidate)) continue;
+      if (around.any((r) => _overlapFraction(r, candidate) > 0.8)) continue;
+      around.add(candidate);
+    }
+    return (direct: direct, around: around);
   }
 
   Future<NavRoute?> _request(List<LatLng> waypoints) async {

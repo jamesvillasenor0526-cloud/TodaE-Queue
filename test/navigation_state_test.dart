@@ -333,6 +333,206 @@ void main() {
     });
   });
 
+  group('what blocks a road rather than slowing it', () {
+    RoadReport confirmedAccident() => _report(
+      type: ReportType.accident,
+      storedStatus: IncidentStatus.confirmed,
+    );
+
+    test('a closure always blocks', () {
+      expect(blocksRoad(_report(type: ReportType.roadClosure), now), isTrue);
+    });
+
+    test('a confirmed accident blocks', () {
+      // Confirmed by an admin, as the one on the road out of Calantipay was.
+      expect(blocksRoad(confirmedAccident(), now), isTrue);
+    });
+
+    test('an accident enough drivers agree on blocks', () {
+      expect(
+        blocksRoad(_report(type: ReportType.accident, confirmations: 3), now),
+        isTrue,
+      );
+    });
+
+    test('a single unverified accident only costs time', () {
+      // One mistaken or malicious report must not send every driver in town
+      // the long way round.
+      expect(blocksRoad(_report(type: ReportType.accident), now), isFalse);
+    });
+
+    test('a confirmed fallen tree blocks, as its description says', () {
+      expect(
+        blocksRoad(
+          _report(
+            type: ReportType.fallenTree,
+            storedStatus: IncidentStatus.confirmed,
+          ),
+          now,
+        ),
+        isTrue,
+      );
+    });
+
+    test('confirmed slowdowns never block', () {
+      for (final slow in [
+        ReportType.trafficHeavy,
+        ReportType.flooding,
+        ReportType.hazard,
+        ReportType.construction,
+      ]) {
+        expect(
+          blocksRoad(
+            _report(type: slow, storedStatus: IncidentStatus.confirmed),
+            now,
+          ),
+          isFalse,
+          reason: slow.name,
+        );
+      }
+    });
+
+    test('a dismissed accident does not block', () {
+      expect(
+        blocksRoad(
+          _report(
+            type: ReportType.accident,
+            storedStatus: IncidentStatus.rejected,
+          ),
+          now,
+        ),
+        isFalse,
+      );
+    });
+
+    group('the route that went through a confirmed accident', () {
+      // The real numbers: through the accident, TomTom said 1308 s; the way
+      // round on Ramos Street was about 2282 s in traffic. With the accident
+      // modelled as a delay, through won — 1308 + 480 = 1788 — and the
+      // driver was sent into a crash the report sheet calls blocking.
+      NavRoute tomTomThrough() => NavRoute(
+        points: _route().points,
+        distanceMeters: 5817,
+        durationSeconds: 1308,
+        source: 'tomtom',
+      );
+      NavRoute ramosStreet() => NavRoute(
+        points: [
+          for (var i = 0; i <= 10; i++) LatLng(14.9580, 120.9010 + i * 0.001),
+        ],
+        distanceMeters: 7340,
+        durationSeconds: 2282,
+        source: NavRoute.osmEstimateSource,
+      );
+
+      test('now goes round it, however much longer', () {
+        final through = scoreRoute(
+          tomTomThrough(),
+          [confirmedAccident()],
+          now: now,
+        );
+        final around = scoreRoute(ramosStreet(), [confirmedAccident()], now: now);
+        expect(through.isBlocked, isTrue);
+        expect(around.incidentsOnRoute, isEmpty);
+        expect(around.adjustedSeconds, greaterThan(through.adjustedSeconds));
+        expect(chooseBest([through, around]), same(around));
+      });
+
+      test('an unconfirmed accident there still just adds time', () {
+        final through = scoreRoute(
+          tomTomThrough(),
+          [_report(type: ReportType.accident)],
+          now: now,
+        );
+        final around = scoreRoute(
+          ramosStreet(),
+          [_report(type: ReportType.accident)],
+          now: now,
+        );
+        expect(through.isBlocked, isFalse);
+        expect(chooseBest([through, around]), same(through));
+        expect(through.adjustedSeconds, 1308 + 480);
+      });
+
+      test('a driver already heading into it is rerouted', () {
+        final through = scoreRoute(
+          tomTomThrough(),
+          [confirmedAccident()],
+          now: now,
+        );
+        final around = scoreRoute(ramosStreet(), [confirmedAccident()], now: now);
+        expect(
+          rerouteDecision(current: through, candidate: around),
+          RerouteReason.roadBlocked,
+        );
+      });
+
+      test('with no way round at all, the driver is told the delay', () {
+        // Every route blocked: the least bad is still chosen, and its ETA
+        // carries the delay rather than pretending the road is clear.
+        final through = scoreRoute(
+          tomTomThrough(),
+          [confirmedAccident()],
+          now: now,
+        );
+        expect(chooseBest([through]), same(through));
+        expect(through.adjustedSeconds, greaterThan(1308));
+      });
+
+      test('names the accident rather than calling the road closed', () {
+        final through = scoreRoute(
+          tomTomThrough(),
+          [confirmedAccident()],
+          now: now,
+        );
+        expect(through.conditionLabel, 'Accident blocking the road');
+      });
+
+      test('an estimated way round says so', () {
+        // Its time is OSRM's traffic-free time scaled to TomTom's traffic —
+        // a model, and labelled as one even with nothing reported on it.
+        final around = scoreRoute(ramosStreet(), const [], now: now);
+        expect(around.penaltySeconds, 0);
+        expect(around.isEstimate, isTrue);
+      });
+    });
+  });
+
+  group('putting an OpenStreetMap route on TomTom\'s footing', () {
+    test('scales by how much slower traffic made the direct road', () {
+      // Measured: TomTom 1308 s against OSRM's traffic-free 625 s.
+      expect(
+        trafficFactor(measuredSeconds: 1308, freeFlowSeconds: 625),
+        closeTo(2.09, 0.01),
+      );
+    });
+
+    test('is bounded against a mismatched pair of routes', () {
+      expect(trafficFactor(measuredSeconds: 6000, freeFlowSeconds: 600), 4.0);
+      expect(trafficFactor(measuredSeconds: 60, freeFlowSeconds: 600), 0.5);
+    });
+
+    test('never divides by nothing', () {
+      expect(trafficFactor(measuredSeconds: 1308, freeFlowSeconds: 0), 1);
+      expect(trafficFactor(measuredSeconds: 0, freeFlowSeconds: 625), 1);
+    });
+
+    test('the scaled route keeps its road and is marked as an estimate', () {
+      final osrm = NavRoute(
+        points: _route().points,
+        distanceMeters: 7340,
+        durationSeconds: 1090,
+      );
+      final scaled = osrm.withTrafficEstimate(2.09);
+      expect(scaled.durationSeconds, closeTo(2278, 1));
+      expect(scaled.points, osrm.points);
+      expect(scaled.hasEstimatedTime, isTrue);
+      // No measured traffic stands behind it, so no report on it is ever
+      // skipped as already counted.
+      expect(scaled.isTrafficAware, isFalse);
+    });
+  });
+
   group('deciding whether a detour is worth looking for', () {
     test('a minor report alone is not worth a routing request', () {
       for (final minor in [

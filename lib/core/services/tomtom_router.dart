@@ -18,6 +18,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -38,12 +39,18 @@ class TomTomRouter {
 
   /// Routes from [from] to [to], best first.
   ///
+  /// [avoid] marks places TomTom must route around, such as a closure or an
+  /// accident a driver reported. Without it the app can only choose among
+  /// the alternatives TomTom happened to offer, and when all of them pass
+  /// through the same incident the driver is sent through it regardless.
+  ///
   /// Returns an empty list on any failure so the caller can fall back to
   /// OSRM rather than leaving the driver without a route.
   Future<List<NavRoute>> route(
     LatLng from,
     LatLng to, {
     int maxAlternatives = 2,
+    List<LatLng> avoid = const [],
   }) async {
     if (!isConfigured) return const [];
 
@@ -67,7 +74,19 @@ class TomTomRouter {
     );
 
     try {
-      final response = await http.get(uri).timeout(_timeout);
+      // Avoid areas are only accepted in a POST body; the query parameters
+      // above apply to both. Verified against the live API over the Glorieta
+      // Rotonda: the plain route had 22 points inside the box, the avoiding
+      // one none, with guidance and alternatives intact.
+      final response = avoid.isEmpty
+          ? await http.get(uri).timeout(_timeout)
+          : await http
+                .post(
+                  uri,
+                  headers: const {'Content-Type': 'application/json'},
+                  body: json.encode(avoidAreasBody(avoid)),
+                )
+                .timeout(_timeout);
       if (response.statusCode != 200) {
         // 403 usually means the key is wrong or over quota; either way the
         // driver should get an OSRM route rather than nothing.
@@ -80,6 +99,57 @@ class TomTomRouter {
       return const [];
     }
   }
+}
+
+/// Half the side of the square avoided around each reported incident.
+///
+/// A report is a point where a driver stood, not the extent of the problem.
+/// 70 m either way covers the Glorieta Rotonda's whole ring — 187 m around —
+/// and the approach to an ordinary junction, without closing off parallel
+/// streets a detour would need.
+const double kAvoidHalfMeters = 70;
+
+/// The most areas sent in one request. More would make it likelier TomTom
+/// finds no route at all, and a report beyond the tenth worst on one trip is
+/// not going to change which road is best.
+const int kMaxAvoidAreas = 10;
+
+/// The POST body that asks TomTom to route around [points].
+///
+/// Pure, so the shape can be tested without the network: TomTom rejects a
+/// malformed body outright, and the driver would silently fall back to a
+/// route that goes straight through the incident.
+Map<String, dynamic> avoidAreasBody(
+  List<LatLng> points, {
+  double halfMeters = kAvoidHalfMeters,
+}) {
+  const metresPerDegree = 111320.0;
+  return {
+    'avoidAreas': {
+      'rectangles': [
+        for (final p in points.take(kMaxAvoidAreas))
+          () {
+            final dLat = halfMeters / metresPerDegree;
+            // A degree of longitude shrinks towards the poles; at Baliwag's
+            // 15° it is still 97% of a degree of latitude, but computed
+            // rather than assumed.
+            final dLng =
+                halfMeters /
+                (metresPerDegree * math.cos(p.latitude * math.pi / 180));
+            return {
+              'southWestCorner': {
+                'latitude': p.latitude - dLat,
+                'longitude': p.longitude - dLng,
+              },
+              'northEastCorner': {
+                'latitude': p.latitude + dLat,
+                'longitude': p.longitude + dLng,
+              },
+            };
+          }(),
+      ],
+    },
+  };
 }
 
 /// Reads a TomTom Calculate Route response into [NavRoute]s.

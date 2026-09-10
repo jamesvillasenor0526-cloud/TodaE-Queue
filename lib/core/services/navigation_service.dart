@@ -23,6 +23,7 @@ import '../models/road_report.dart';
 import '../models/trip_state.dart';
 import 'navigation_router.dart';
 import 'report_service.dart';
+import 'traffic_incident_service.dart';
 
 /// The navigation fields as they appear on the booking document.
 class TripNavigation {
@@ -202,17 +203,11 @@ class NavigationService {
     required LatLng to,
   }) async {
     _offRoute.reset();
-    final routes = await NavigationRouter.instance.routeWithAlternatives(
-      from,
-      to,
-    );
-    if (routes.isEmpty) return null;
-
-    final reports = await _nearbyReports(from);
     final now = DateTime.now();
-    final scored = [
-      for (final r in routes) scoreRoute(r, reports, now: now, from: from),
-    ];
+    final conditions = await _conditionsNear(from);
+    final scored = await _scoredCandidates(from, to, conditions, now);
+    if (scored.isEmpty) return null;
+
     final choices = buildChoices(scored);
     if (choices == null) return null;
 
@@ -278,26 +273,26 @@ class NavigationService {
     if (!wentOffRoute && !due) return RerouteReason.none;
     _lastRecalc = now;
 
-    final reports = await _nearbyReports(position);
+    final conditions = await _conditionsNear(position);
     // Re-score what is being driven against the conditions reported since it
     // was chosen — this is how a new incident reaches an in-progress trip.
-    final rescoredCurrent =
-        scoreRoute(current.route, reports, now: now, from: position);
+    final rescoredCurrent = conditions.score(
+      current.route,
+      now: now,
+      from: position,
+    );
 
-    final blocker = rescoredCurrent.incidentsOnRoute
-        .where((r) => r.type == ReportType.roadClosure)
-        .firstOrNull;
-
-    final candidates = await NavigationRouter.instance.routeWithAlternatives(
+    final scored = await _scoredCandidates(
       position,
       target,
-      avoid: blocker?.location ?? rescoredCurrent.incidentsOnRoute.firstOrNull?.location,
+      conditions,
+      now,
+      // What is ahead on the road actually being driven, not only on the
+      // fresh routes — that is the incident the driver is heading into.
+      alsoAvoid: rescoredCurrent.incidentsOnRoute,
     );
-    if (candidates.isEmpty) return RerouteReason.none;
+    if (scored.isEmpty) return RerouteReason.none;
 
-    final scored = [
-      for (final r in candidates) scoreRoute(r, reports, now: now, from: position),
-    ];
     final choices = buildChoices(scored);
     if (choices == null) return RerouteReason.none;
     // Refresh what the driver can switch to, so the options panel reflects
@@ -326,6 +321,81 @@ class NavigationService {
     _current = best;
     await _publishRoute(bookingId, best, position, message: decision.message);
     return decision;
+  }
+
+  /// Every route worth considering from [from] to [to], scored.
+  ///
+  /// This is what turns other drivers' reports into routing. TomTom's own
+  /// alternatives are fetched and scored first; if the best of them — or the
+  /// route being driven, via [alsoAvoid] — runs into something reported,
+  /// TomTom is asked again with those places marked as areas to avoid. Both
+  /// sets are then scored together, so the detour is taken only when it
+  /// beats the delay the incident is expected to cause. Otherwise the driver
+  /// keeps the road and the ETA carries that delay.
+  Future<List<RouteScore>> _scoredCandidates(
+    LatLng from,
+    LatLng to,
+    _Conditions conditions,
+    DateTime now, {
+    List<RoadReport> alsoAvoid = const [],
+  }) async {
+    final routes = await NavigationRouter.instance.routeWithAlternatives(
+      from,
+      to,
+    );
+    final scored = [
+      for (final r in routes) conditions.score(r, now: now, from: from),
+    ];
+    if (scored.isEmpty) return scored;
+
+    final best = chooseBest(scored)!;
+    final trouble = <RoadReport>[
+      for (final r in [...best.incidentsOnRoute, ...alsoAvoid])
+        if (conditions.costsTime(r)) r,
+    ]..sort((a, b) => b.type.severity.compareTo(a.type.severity));
+    if (trouble.isEmpty) return scored;
+
+    // One spot per place: two drivers reporting the same accident is one
+    // area to avoid, not two overlapping ones eating the request's limit.
+    final spots = <LatLng>[];
+    for (final r in trouble) {
+      if (spots.every((s) => distanceKm(s, r.location) > 0.1)) {
+        spots.add(r.location);
+      }
+    }
+
+    final detours = await NavigationRouter.instance.routeWithAlternatives(
+      from,
+      to,
+      maxAlternatives: 1,
+      avoid: spots,
+    );
+    for (final d in detours) {
+      if (!d.isRealRoute) continue;
+      // TomTom's times include measured traffic and OSRM's are free-flow.
+      // Should the avoiding request fall back to OSRM, its optimistic time
+      // would beat a TomTom route unfairly, so only like is compared with
+      // like.
+      if (d.isTrafficAware != best.route.isTrafficAware) continue;
+      if (scored.any((s) => s.route.sameRouteAs(d))) continue;
+      scored.add(conditions.score(d, now: now, from: from));
+    }
+    return scored;
+  }
+
+  /// What is known about the roads near [origin]: what drivers reported, and
+  /// what the live traffic feed measured.
+  Future<_Conditions> _conditionsNear(LatLng origin) async {
+    final reports = await _nearbyReports(origin);
+    var measured = const <TrafficIncident>[];
+    try {
+      measured = await TrafficIncidentService.instance.near(origin);
+    } catch (e) {
+      // With no measured data every report counts in full, which errs
+      // towards believing drivers — the safer direction.
+      debugPrint('Could not read measured traffic for routing: $e');
+    }
+    return _Conditions(reports, measured);
   }
 
   /// Reports near enough to matter for routing.
@@ -393,4 +463,34 @@ class NavigationService {
       // Cosmetic only.
     }
   }
+}
+
+/// Reported and measured conditions, gathered once per recalculation so
+/// every candidate route is judged against the same picture.
+class _Conditions {
+  _Conditions(this.reports, this.measured);
+
+  final List<RoadReport> reports;
+  final List<TrafficIncident> measured;
+
+  /// Whether the live feed already shows this report's congestion, in which
+  /// case TomTom's travel time includes it.
+  bool alreadyMeasured(RoadReport r) =>
+      liveTrafficAgreesWith(r.type, r.location, measured);
+
+  /// Whether a report on the route is expected to cost the driver time that
+  /// the router does not already know about — and so is worth routing
+  /// around.
+  bool costsTime(RoadReport r) =>
+      incidentDelaySeconds(r.type) > 0 &&
+      !(r.type.category == ReportCategory.traffic && alreadyMeasured(r));
+
+  RouteScore score(NavRoute route, {required DateTime now, LatLng? from}) =>
+      scoreRoute(
+        route,
+        reports,
+        now: now,
+        from: from,
+        alreadyMeasured: alreadyMeasured,
+      );
 }

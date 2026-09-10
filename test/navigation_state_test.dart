@@ -333,6 +333,125 @@ void main() {
     });
   });
 
+  group('driver reports on a route with live traffic', () {
+    // TomTom is the router on every trip, so every route is traffic-aware.
+    // These pin down when a driver's report adds time on top of TomTom's.
+    NavRoute tomTom() => NavRoute(
+      points: _route().points,
+      distanceMeters: 1075,
+      durationSeconds: 600,
+      source: 'tomtom',
+    );
+
+    test('a jam the feed cannot see still adds time', () {
+      // The bug: a driver reported heavy traffic at the Glorieta Rotonda,
+      // TomTom showed nothing within 2.9 km, and the report added nothing —
+      // no avoidance, no change to the ETA.
+      final score = scoreRoute(
+        tomTom(),
+        [_report(type: ReportType.trafficHeavy)],
+        now: now,
+        alreadyMeasured: (_) => false,
+      );
+      expect(score.penaltySeconds, greaterThan(0));
+      expect(score.adjustedSeconds, greaterThan(600));
+    });
+
+    test('with no measured data at all, drivers are believed', () {
+      // The feed being down or silent is not evidence the road is clear.
+      final score = scoreRoute(
+        tomTom(),
+        [_report(type: ReportType.trafficHeavy)],
+        now: now,
+      );
+      expect(score.penaltySeconds, greaterThan(0));
+    });
+
+    test('a jam the feed already measured is not counted twice', () {
+      // TomTom's travel time already includes it.
+      final score = scoreRoute(
+        tomTom(),
+        [_report(type: ReportType.trafficHeavy)],
+        now: now,
+        alreadyMeasured: (_) => true,
+      );
+      expect(score.penaltySeconds, 0);
+      expect(score.adjustedSeconds, 600);
+    });
+
+    test('measured traffic never cancels an accident', () {
+      // A router knows the road is slow, not that there is a crash on it.
+      final score = scoreRoute(
+        tomTom(),
+        [_report(type: ReportType.accident)],
+        now: now,
+        alreadyMeasured: (_) => true,
+      );
+      expect(score.penaltySeconds, greaterThan(0));
+    });
+
+    test('the report still shows on the route even when not counted', () {
+      // Left out of the time, never out of what the driver is told about.
+      final score = scoreRoute(
+        tomTom(),
+        [_report(type: ReportType.trafficHeavy)],
+        now: now,
+        alreadyMeasured: (_) => true,
+      );
+      expect(score.incidentsOnRoute, hasLength(1));
+    });
+
+    test('a detour wins when it is faster than the delay it avoids', () {
+      // Measured live over the rotonda: avoiding it cost 67 s. Heavy traffic
+      // is modelled at 300 s, so the detour should be chosen.
+      final through = scoreRoute(
+        tomTom(),
+        [_report(type: ReportType.trafficHeavy)],
+        now: now,
+      );
+      final around = scoreRoute(
+        NavRoute(
+          points: [
+            for (var i = 0; i <= 10; i++)
+              LatLng(14.9560, 120.9010 + i * 0.001),
+          ],
+          distanceMeters: 1196,
+          durationSeconds: 667,
+          source: 'tomtom',
+        ),
+        [_report(type: ReportType.trafficHeavy)],
+        now: now,
+      );
+      expect(around.incidentsOnRoute, isEmpty);
+      expect(chooseBest([through, around]), same(around));
+    });
+
+    test('a detour loses when the incident costs less than going round', () {
+      // A road hazard is modelled at 60 s; a 67 s detour is not worth it, so
+      // the driver keeps the road and the ETA carries the delay instead.
+      final through = scoreRoute(
+        tomTom(),
+        [_report(type: ReportType.hazard)],
+        now: now,
+      );
+      final around = scoreRoute(
+        NavRoute(
+          points: [
+            for (var i = 0; i <= 10; i++)
+              LatLng(14.9560, 120.9010 + i * 0.001),
+          ],
+          distanceMeters: 1196,
+          durationSeconds: 667,
+          source: 'tomtom',
+        ),
+        [_report(type: ReportType.hazard)],
+        now: now,
+      );
+      expect(chooseBest([through, around]), same(through));
+      expect(through.adjustedSeconds, greaterThan(600));
+    });
+  });
+
   group('choosing a route', () {
     test('prefers the lower adjusted time, not the shorter road', () {
       // The spec's example: longer but quicker should win.

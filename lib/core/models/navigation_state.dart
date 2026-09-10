@@ -441,20 +441,31 @@ List<RoadReport> incidentsOn(
 }
 
 /// Applies the congestion model to a route.
+///
+/// [alreadyMeasured] says whether the router's own traffic data already
+/// shows a report's congestion at that spot. Only then is the report's
+/// delay left out, because the router's travel time includes it and adding
+/// it again would count the same jam twice. Without it every report counts.
 RouteScore scoreRoute(
   NavRoute route,
   Iterable<RoadReport> reports, {
   required DateTime now,
   LatLng? from,
+  bool Function(RoadReport report)? alreadyMeasured,
 }) {
   final on = incidentsOn(route, reports, now: now, from: from);
   var penalty = 0.0;
   for (final r in on) {
-    // When the router already measured the traffic, adding this app's guess
-    // at the same congestion on top would count it twice. Discrete
-    // incidents still count — a router knows the road is slow, but not that
-    // there is an accident on it.
-    if (route.isTrafficAware && r.type.category == ReportCategory.traffic) {
+    // This used to skip every traffic report on a traffic-aware route, on
+    // the assumption the router had measured it. TomTom is now the router
+    // on every trip, and it saw nothing at all at the Glorieta Rotonda when
+    // a driver reported heavy traffic there — so the report added nothing,
+    // the route never avoided it, and the ETA never moved. A jam is only
+    // left out when the measured data demonstrably has it; the feed saying
+    // nothing is not evidence the road is clear.
+    if (route.isTrafficAware &&
+        r.type.category == ReportCategory.traffic &&
+        (alreadyMeasured?.call(r) ?? false)) {
       continue;
     }
     // A corroborated report is trusted more, up to double weight — but a

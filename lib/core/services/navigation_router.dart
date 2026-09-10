@@ -54,7 +54,7 @@ class NavigationRouter {
     LatLng from,
     LatLng to, {
     int maxAlternatives = 2,
-    LatLng? avoid,
+    List<LatLng> avoid = const [],
   }) async {
     // TomTom returns genuine alternatives and traffic-aware times, so when
     // a key is configured there is nothing to force with detour waypoints.
@@ -63,6 +63,10 @@ class NavigationRouter {
         from,
         to,
         maxAlternatives: maxAlternatives,
+        // Previously not passed at all: the avoid point only ever shaped the
+        // OSRM fallback, so on TomTom a reported incident could be ranked
+        // against but never actually routed around.
+        avoid: avoid,
       );
       if (fromTomTom.isNotEmpty) return fromTomTom;
       // Key present but the call failed or was over quota: fall through to
@@ -79,7 +83,7 @@ class NavigationRouter {
 
     // Push the detour off to each side of whatever we are avoiding — or of
     // the midpoint, when simply looking for options.
-    final pivot = avoid ?? _midpoint(from, to);
+    final pivot = avoid.firstOrNull ?? _midpoint(from, to);
     final span = _degreesBetween(from, to);
 
     // Gentle offsets first, so the least contrived detour is found before

@@ -237,13 +237,20 @@ void main() {
       expiresAt: now.add(const Duration(hours: 1)),
     );
 
-    test('a traffic report is ignored on a traffic-aware route', () {
+    test('a traffic report the feed measured is not counted again', () {
       // TomTom already measured this congestion; adding the app's estimate
       // of the same jam on top would count it twice.
+      //
+      // This used to assume TomTom measured *every* jam on its routes and
+      // ignored all traffic reports outright. It does not: a driver reported
+      // heavy traffic at the Glorieta Rotonda with TomTom's nearest incident
+      // 2.9 km away, and the report changed nothing. The skip now applies
+      // only where the measured data demonstrably has the jam.
       final score = scoreRoute(
         lineOf('tomtom'),
         [reportOf(ReportType.trafficHeavy)],
         now: now,
+        alreadyMeasured: (_) => true,
       );
       expect(score.penaltySeconds, 0);
       expect(score.isEstimate, isFalse);
@@ -276,6 +283,84 @@ void main() {
         now: now,
       );
       expect(score.isBlocked, isTrue);
+    });
+  });
+
+  group('asking TomTom to route around an incident', () {
+    const rotonda = LatLng(14.9540, 120.9010);
+
+    Map<String, dynamic> rect(Map<String, dynamic> body, int i) =>
+        ((body['avoidAreas'] as Map)['rectangles'] as List)[i]
+            as Map<String, dynamic>;
+
+    test('builds the body shape TomTom accepted live', () {
+      // This exact shape routed around the Glorieta Rotonda: 22 route points
+      // inside the box without it, none with it.
+      final body = avoidAreasBody([rotonda]);
+      final r = rect(body, 0);
+      expect(r.keys, containsAll(['southWestCorner', 'northEastCorner']));
+      expect(
+        (r['southWestCorner'] as Map).keys,
+        containsAll(['latitude', 'longitude']),
+      );
+    });
+
+    test('the box surrounds the reported spot', () {
+      final r = rect(avoidAreasBody([rotonda]), 0);
+      final sw = r['southWestCorner'] as Map, ne = r['northEastCorner'] as Map;
+      expect(sw['latitude'] as double, lessThan(rotonda.latitude));
+      expect(sw['longitude'] as double, lessThan(rotonda.longitude));
+      expect(ne['latitude'] as double, greaterThan(rotonda.latitude));
+      expect(ne['longitude'] as double, greaterThan(rotonda.longitude));
+    });
+
+    test('is big enough to cover the rotonda ring and no more', () {
+      // The ring is 187 m around, about 60 m across. The box has to take all
+      // of it, but closing off a whole neighbourhood would leave a detour
+      // nowhere to go.
+      final r = rect(avoidAreasBody([rotonda]), 0);
+      final sw = r['southWestCorner'] as Map, ne = r['northEastCorner'] as Map;
+      const d = Distance();
+      final width = d.as(
+        LengthUnit.Meter,
+        LatLng(sw['latitude'] as double, sw['longitude'] as double),
+        LatLng(sw['latitude'] as double, ne['longitude'] as double),
+      );
+      final height = d.as(
+        LengthUnit.Meter,
+        LatLng(sw['latitude'] as double, sw['longitude'] as double),
+        LatLng(ne['latitude'] as double, sw['longitude'] as double),
+      );
+      // Square on the ground, not just in degrees.
+      expect(width, closeTo(140, 3));
+      expect(height, closeTo(140, 3));
+    });
+
+    test('caps the number of areas sent', () {
+      final many = [
+        for (var i = 0; i < 25; i++) LatLng(14.95 + i * 0.002, 120.90),
+      ];
+      final rects =
+          (avoidAreasBody(many)['avoidAreas'] as Map)['rectangles'] as List;
+      expect(rects, hasLength(kMaxAvoidAreas));
+    });
+
+    test('keeps the worst first when capping', () {
+      // Callers sort by severity; the cap must drop from the end, never the
+      // road closure at the front.
+      final many = [
+        rotonda,
+        for (var i = 1; i < 25; i++) LatLng(14.95 + i * 0.002, 120.90),
+      ];
+      final first = rect(avoidAreasBody(many), 0);
+      final sw = first['southWestCorner'] as Map;
+      expect(sw['latitude'] as double, closeTo(rotonda.latitude, 0.001));
+    });
+
+    test('nothing to avoid sends no areas', () {
+      final rects =
+          (avoidAreasBody(const [])['avoidAreas'] as Map)['rectangles'] as List;
+      expect(rects, isEmpty);
     });
   });
 }

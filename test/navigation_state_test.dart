@@ -479,6 +479,33 @@ void main() {
         expect(through.adjustedSeconds, greaterThan(1308));
       });
 
+      test('the blocked way is kept, to show why it is not taken', () {
+        // Never offered — it cannot be driven — but shown, so a driver
+        // looking at a longer route sees why the obvious road is not it.
+        final through = scoreRoute(
+          tomTomThrough(),
+          [confirmedAccident()],
+          now: now,
+        );
+        final around = scoreRoute(ramosStreet(), [confirmedAccident()], now: now);
+        final choices = buildChoices([through, around])!;
+        expect(choices.recommended, same(around));
+        expect(choices.alternatives, isEmpty);
+        expect(choices.blocked, same(through));
+        expect(choices.blocked!.conditionLabel, 'Accident blocking the road');
+      });
+
+      test('with no way round, nothing is shown as blocked beside it', () {
+        final through = scoreRoute(
+          tomTomThrough(),
+          [confirmedAccident()],
+          now: now,
+        );
+        final choices = buildChoices([through])!;
+        expect(choices.recommended, same(through));
+        expect(choices.blocked, isNull);
+      });
+
       test('names the accident rather than calling the road closed', () {
         final through = scoreRoute(
           tomTomThrough(),
@@ -499,22 +526,73 @@ void main() {
   });
 
   group('putting an OpenStreetMap route on TomTom\'s footing', () {
-    test('scales by how much slower traffic made the direct road', () {
-      // Measured: TomTom 1308 s against OSRM's traffic-free 625 s.
+    test('compares pace per kilometre, not trip against trip', () {
+      // Measured on the Calantipay trip: TomTom 1308 s for its 5817 m south
+      // route; OSRM 625 s for its 6570 m east one. Trip against trip gave
+      // 2.09, which made the longer east route tie with TomTom's by
+      // construction. Per kilometre it is 2.36.
       expect(
-        trafficFactor(measuredSeconds: 1308, freeFlowSeconds: 625),
-        closeTo(2.09, 0.01),
+        trafficFactor(
+          measuredSeconds: 1308,
+          measuredMeters: 5817,
+          freeFlowSeconds: 625,
+          freeFlowMeters: 6570,
+        ),
+        closeTo(2.36, 0.01),
       );
     });
 
+    test('a longer road comes out slower, not tied', () {
+      final factor = trafficFactor(
+        measuredSeconds: 1308,
+        measuredMeters: 5817,
+        freeFlowSeconds: 625,
+        freeFlowMeters: 6570,
+      );
+      // OSRM's east route, scaled, against TomTom's shorter south one.
+      expect(625 * factor, greaterThan(1308));
+    });
+
     test('is bounded against a mismatched pair of routes', () {
-      expect(trafficFactor(measuredSeconds: 6000, freeFlowSeconds: 600), 4.0);
-      expect(trafficFactor(measuredSeconds: 60, freeFlowSeconds: 600), 0.5);
+      expect(
+        trafficFactor(
+          measuredSeconds: 6000,
+          measuredMeters: 1000,
+          freeFlowSeconds: 60,
+          freeFlowMeters: 1000,
+        ),
+        4.0,
+      );
+      expect(
+        trafficFactor(
+          measuredSeconds: 60,
+          measuredMeters: 1000,
+          freeFlowSeconds: 600,
+          freeFlowMeters: 1000,
+        ),
+        0.5,
+      );
     });
 
     test('never divides by nothing', () {
-      expect(trafficFactor(measuredSeconds: 1308, freeFlowSeconds: 0), 1);
-      expect(trafficFactor(measuredSeconds: 0, freeFlowSeconds: 625), 1);
+      expect(
+        trafficFactor(
+          measuredSeconds: 1308,
+          measuredMeters: 5817,
+          freeFlowSeconds: 0,
+          freeFlowMeters: 6570,
+        ),
+        1,
+      );
+      expect(
+        trafficFactor(
+          measuredSeconds: 1308,
+          measuredMeters: 0,
+          freeFlowSeconds: 625,
+          freeFlowMeters: 6570,
+        ),
+        1,
+      );
     });
 
     test('the scaled route keeps its road and is marked as an estimate', () {

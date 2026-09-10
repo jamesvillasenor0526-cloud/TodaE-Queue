@@ -119,6 +119,54 @@ List<LatLng> remainingLine(List<LatLng> points, RouteProgress p) => [
   ...points.sublist(math.min(p.segment + 1, points.length)),
 ];
 
+/// [route] from the driver's position onwards, as if fetched from there.
+///
+/// For reusing a route found a minute or two ago without asking for it
+/// again. Its time, distance, line and turn list all start from [p], so it
+/// compares fairly with a route fetched from here just now — otherwise a
+/// cached alternative would carry the road already driven, and its "2 min
+/// slower" would be overstated by however long the driver had been going.
+/// Time is scaled by distance left, which is the same assumption the ETA
+/// makes.
+NavRoute trimRouteTo(NavRoute route, RouteProgress p) {
+  final steps = route.steps;
+  final stepsTotal = steps.fold(0.0, (s, st) => s + st.distanceMeters);
+  final scale = (stepsTotal > 0 && p.totalMeters > 0)
+      ? p.totalMeters / stepsTotal
+      : 1.0;
+
+  final kept = <NavStep>[];
+  var offset = 0.0;
+  for (final step in steps) {
+    final start = offset * scale;
+    final end = (offset + step.distanceMeters) * scale;
+    offset += step.distanceMeters;
+    if (end <= p.travelledMeters) continue; // wholly behind the driver
+    if (start < p.travelledMeters) {
+      // The step the driver is part-way along: its manoeuvre is behind them,
+      // so it becomes the new start, with only the distance still to run.
+      kept.add(
+        NavStep(
+          road: step.road,
+          maneuver: 'depart',
+          distanceMeters: (end - p.travelledMeters) / scale,
+        ),
+      );
+    } else {
+      kept.add(step);
+    }
+  }
+
+  return NavRoute(
+    points: remainingLine(route.points, p),
+    distanceMeters: p.remainingMeters,
+    durationSeconds: route.durationSeconds * p.remainingFraction,
+    steps: kept,
+    source: route.source,
+    trafficDelaySeconds: route.trafficDelaySeconds * p.remainingFraction,
+  );
+}
+
 /// Compass bearing from [a] to [b], 0 = north, clockwise, in degrees.
 double bearingDegrees(LatLng a, LatLng b) {
   final lat1 = a.latitude * math.pi / 180;
@@ -229,21 +277,48 @@ UpcomingTurn? upcomingAt(
 /// stretch that runs at least [minSeparation] metres from [main]. Returns
 /// null when the two never separate by that much, in which case there is no
 /// honest place for the label.
+///
+/// [others] are the other alternatives. Two alternatives often share a road
+/// for most of their length — Apple's two on the same trip both ran down
+/// NIA Road — and labels placed only by distance from [main] land on that
+/// shared road, one on top of the other. So the stretch where this route is
+/// apart from *every* other line is preferred, and only if there is none is
+/// the label placed by [main] alone.
 LatLng? labelAnchor(
   List<LatLng> alternative,
   List<LatLng> main, {
   double minSeparation = 40,
+  List<List<LatLng>> others = const [],
 }) {
   if (alternative.length < 2 || main.length < 2) return null;
+  if (others.isNotEmpty) {
+    final alone = _longestApart(alternative, [main, ...others], minSeparation);
+    if (alone != null) return alone;
+  }
+  return _longestApart(alternative, [main], minSeparation);
+}
 
-  // Runs of consecutive points that are apart from the main route.
+/// The middle of the longest stretch of [line] at least [minSeparation]
+/// from every line in [from].
+LatLng? _longestApart(
+  List<LatLng> line,
+  List<List<LatLng>> from,
+  double minSeparation,
+) {
+  final alternative = line;
+  // Runs of consecutive points that are apart from all of [from].
   var bestStart = -1, bestEnd = -1;
   var bestLength = 0.0;
   var runStart = -1;
   var runLength = 0.0;
   for (var i = 0; i < alternative.length; i++) {
-    final d = nearestOnWay(main, alternative[i])?.distanceMeters ?? 0;
-    final apart = d >= minSeparation;
+    final apart = from.every(
+      (other) =>
+          (other.length < 2
+              ? double.infinity
+              : (nearestOnWay(other, alternative[i])?.distanceMeters ?? 0)) >=
+          minSeparation,
+    );
     if (apart) {
       if (runStart < 0) {
         runStart = i;
@@ -394,7 +469,8 @@ _Projection? _nearest(List<LatLng> points, LatLng p, int from, int to) {
   final cosLat = math.cos(p.latitude * math.pi / 180);
   double x(LatLng q) =>
       (q.longitude - p.longitude) * math.pi / 180 * _earthRadius * cosLat;
-  double y(LatLng q) => (q.latitude - p.latitude) * math.pi / 180 * _earthRadius;
+  double y(LatLng q) =>
+      (q.latitude - p.latitude) * math.pi / 180 * _earthRadius;
 
   _Projection? best;
   for (var i = from; i <= to; i++) {

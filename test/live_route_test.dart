@@ -202,6 +202,16 @@ void main() {
       }
     });
 
+    test('two alternatives get labels in different places', () {
+      // Each placed where its own route goes its own way, so the two labels
+      // never stack on a road the alternatives share.
+      final a = labelAnchor(routes[1].points, main.points, others: [routes[2].points])!;
+      final b = labelAnchor(routes[2].points, main.points, others: [routes[1].points])!;
+      expect(distance.as(LengthUnit.Meter, a, b), greaterThan(200));
+      expect(nearestOnWay(routes[2].points, a)!.distanceMeters, greaterThanOrEqualTo(40));
+      expect(nearestOnWay(routes[1].points, b)!.distanceMeters, greaterThanOrEqualTo(40));
+    });
+
     test('no label when the two routes never separate', () {
       expect(labelAnchor(main.points, main.points), isNull);
     });
@@ -405,6 +415,86 @@ void main() {
         for (var i = 5; i >= 0; i--) LatLng(14.95, 120.90 + i * 0.0001),
       ];
       expect(findLoop(uTurn), isNull);
+    });
+  });
+
+  group('alternatives that are a different way, not the main way again', () {
+    RouteScore scored(NavRoute r) =>
+        RouteScore(route: r, incidentsOnRoute: const [], penaltySeconds: 0);
+
+    test('measures how much of a route runs on another', () {
+      expect(sharedFraction(main.points, main.points), closeTo(1, 0.01));
+      // TomTom's third route follows the fastest for three-quarters of its
+      // length; the second takes a different way for more than half.
+      expect(sharedFraction(routes[2].points, main.points), closeTo(0.76, 0.02));
+      expect(sharedFraction(routes[1].points, main.points), closeTo(0.46, 0.02));
+    });
+
+    test('the main way with a variation is not offered as another way', () {
+      final choices = buildChoices(
+        routes.map(scored).toList(),
+        maxShared: kMaxSharedWithRecommended,
+      )!;
+      expect(choices.recommended.route.sameRouteAs(main), isTrue);
+      // Route 1, which goes a different way, is offered; route 2, which is
+      // the fastest route again for 76% of it, is not.
+      expect(choices.alternatives, hasLength(1));
+      expect(choices.alternatives.single.route.sameRouteAs(routes[1]), isTrue);
+    });
+
+    test('without the check, both would have been offered', () {
+      final choices = buildChoices(routes.map(scored).toList())!;
+      expect(choices.alternatives, hasLength(2));
+    });
+  });
+
+  group('reusing a route found a minute ago', () {
+    test('it starts where the driver is now', () {
+      final p = progressAlong(main.points, main.points[80], cumulative: cum)!;
+      final trimmed = trimRouteTo(main, p);
+      expect(trimmed.points.first, p.snapped);
+      expect(trimmed.points.last, main.points.last);
+      expect(trimmed.distanceMeters, closeTo(p.remainingMeters, 1));
+    });
+
+    test('its time no longer includes the road already driven', () {
+      final p = progressAlong(main.points, main.points[110], cumulative: cum)!;
+      final trimmed = trimRouteTo(main, p);
+      expect(
+        trimmed.durationSeconds,
+        closeTo(main.durationSeconds * p.remainingFraction, 1),
+      );
+      expect(trimmed.durationSeconds, lessThan(main.durationSeconds));
+    });
+
+    test('its next turn is the same turn, the same distance away', () {
+      // Trimmed at 1000 m, the next turn is the one TomTom put at 1851 m —
+      // about 850 m from here, whichever way it is worked out.
+      final p = progressAlong(
+        main.points,
+        main.points[cum.indexWhere((c) => c >= 1000)],
+        cumulative: cum,
+      )!;
+      final trimmed = trimRouteTo(main, p);
+      final fromTrimmed = upcomingAt(trimmed, 0)!;
+      final fromOriginal = upcomingAt(
+        main,
+        p.travelledMeters,
+        geometryMeters: cum.last,
+      )!;
+      expect(fromTrimmed.key, fromOriginal.key);
+      expect(fromTrimmed.metersAway, closeTo(fromOriginal.metersAway, 5));
+    });
+
+    test('turns already passed are dropped', () {
+      final p = progressAlong(
+        main.points,
+        main.points[cum.indexWhere((c) => c >= 2500)],
+        cumulative: cum,
+      )!;
+      final trimmed = trimRouteTo(main, p);
+      expect(trimmed.steps.first.maneuver, 'depart');
+      expect(trimmed.steps.length, lessThan(main.steps.length));
     });
   });
 }

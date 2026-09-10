@@ -111,30 +111,40 @@ class NavigationRouter {
     return routes;
   }
 
-  /// Ways from [from] to [to] that stay clear of every point in [avoid],
-  /// found on OpenStreetMap's road network, plus OSRM's direct route for
-  /// calibrating their times.
+  /// Complete routes from [from] to [to] on OpenStreetMap's road network,
+  /// each taking a genuinely different way: OSRM's own direct route, plus
+  /// routes pushed through points off to either side. Quickest first.
   ///
-  /// This exists because TomTom's map is missing roads OSM has — barangay
-  /// streets, which are exactly where tricycles drive. Asked to avoid a
-  /// confirmed accident on the road out of Calantipay, TomTom returned the
-  /// same three routes straight through it; even told to go via Ramos
-  /// Street, it drove through the accident to get there. OSRM found the way
-  /// round on Ramos Street, 257 m clear of it.
+  /// Two jobs, both because TomTom's map is missing roads OSM has —
+  /// barangay streets, which are exactly where tricycles drive:
   ///
-  /// Only routes that actually keep [clearanceMeters] from every point are
-  /// returned. A waypoint pushes a route into a corridor but does not stop
-  /// it passing the incident on the way there, and a "way round" that goes
-  /// through what it is going round is worse than none.
-  Future<({NavRoute? direct, List<NavRoute> around})> osmWaysAround(
+  ///   * **Going round a blocked road.** With [avoid] given, only routes
+  ///     keeping [clearanceMeters] from every point are returned. On the
+  ///     Calantipay trip TomTom sent all three of its routes through a
+  ///     confirmed accident and could not be made to avoid it.
+  ///   * **Offering real alternatives.** TomTom's alternatives there all left
+  ///     on the same road and split later — the main way again. Apple Maps
+  ///     offered ways that differed from the start; so does this.
+  ///
+  /// The direct route used to be fetched only to calibrate times and then
+  /// thrown away, and the first way round that cleared the accident was
+  /// taken. OSRM's direct route went east — 6.6 km, 749 m clear of the
+  /// accident, the way Apple sent its fastest — but the app sent the driver
+  /// west, 7.3 km, because that was the first one tried. Now every side is
+  /// tried, the direct route is a candidate like any other, and scoring
+  /// picks the quickest.
+  ///
+  /// Requests run in parallel: the public OSRM server can take seconds each,
+  /// and a driver waiting on a reroute should not wait for them in turn.
+  Future<({NavRoute? direct, List<NavRoute> routes})> osmCorridors(
     LatLng from,
     LatLng to, {
-    required List<LatLng> avoid,
+    List<LatLng> avoid = const [],
     double clearanceMeters = kIncidentOnRouteMeters,
-    int maxRoutes = 1,
+    int maxRoutes = 3,
   }) async {
     final direct = await _request([from, to]);
-    if (direct == null || avoid.isEmpty) return (direct: direct, around: <NavRoute>[]);
+    if (direct == null) return (direct: null, routes: <NavRoute>[]);
 
     bool clearOfAll(NavRoute r) => avoid.every(
       (a) =>
@@ -142,27 +152,34 @@ class NavigationRouter {
           clearanceMeters,
     );
 
-    final around = <NavRoute>[];
+    // Off either side of whatever is in the way — or of the midpoint, when
+    // simply looking for other ways.
+    final pivot = avoid.firstOrNull ?? _midpoint(from, to);
     final span = _degreesBetween(from, to);
-    // Gentle offsets first, as for alternatives: the least contrived way
-    // round is the one a driver would actually take.
-    for (final offset in const [0.12, -0.12, 0.22, -0.22, 0.35, -0.35]) {
-      if (around.length >= maxRoutes) break;
-      final waypoint = _perpendicularOffset(from, to, avoid.first, span * offset);
-      final candidate = await _withoutLoop(
-        from,
-        to,
-        await _request([from, waypoint, to]),
-      );
-      if (candidate == null) continue;
+    final pushed = await Future.wait([
+      for (final offset in const [0.15, -0.15, 0.3, -0.3])
+        _through(from, to, _perpendicularOffset(from, to, pivot, span * offset)),
+    ]);
+
+    final candidates = [direct, ...pushed.whereType<NavRoute>()]
+      ..sort((a, b) => a.durationSeconds.compareTo(b.durationSeconds));
+
+    final out = <NavRoute>[];
+    for (final c in candidates) {
+      if (out.length >= maxRoutes) break;
       // Twice the direct distance is a tour of the district, not a detour.
-      if (candidate.distanceMeters > direct.distanceMeters * 2) continue;
-      if (!clearOfAll(candidate)) continue;
-      if (around.any((r) => _overlapFraction(r, candidate) > 0.8)) continue;
-      around.add(candidate);
+      if (c.distanceMeters > direct.distanceMeters * 2) continue;
+      if (avoid.isNotEmpty && !clearOfAll(c)) continue;
+      if (findLoop(c.points) != null) continue;
+      if (out.any((r) => _overlapFraction(r, c) > 0.8)) continue;
+      out.add(c);
     }
-    return (direct: direct, around: around);
+    return (direct: direct, routes: out);
   }
+
+  /// A route pushed through [via], with any out-and-back removed.
+  Future<NavRoute?> _through(LatLng from, LatLng to, LatLng via) async =>
+      _withoutLoop(from, to, await _request([from, via, to]));
 
   /// [route] with any out-and-back removed — by asking again, not by
   /// editing the geometry.

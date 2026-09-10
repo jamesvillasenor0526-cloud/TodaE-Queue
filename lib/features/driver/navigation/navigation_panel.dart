@@ -139,8 +139,13 @@ class _NavigationPanelState extends State<NavigationPanel> {
                 _EtaRow(
                   remaining: remaining ?? Duration.zero,
                   meters: metres ?? 0,
-                  estimate: route.isEstimate,
+                  delays: route.penaltySeconds > 0,
+                  estimatedRoad: route.route.hasEstimatedTime,
                 ),
+                if (choices?.blocked != null) ...[
+                  const SizedBox(height: AppSpacing.sm),
+                  _BlockedNote(text: choices!.blocked!.conditionLabel),
+                ],
                 if (upcoming != null) ...[
                   const SizedBox(height: AppSpacing.sm),
                   _NextTurn(turn: upcoming),
@@ -226,11 +231,17 @@ class _EtaRow extends StatelessWidget {
   const _EtaRow({
     required this.remaining,
     required this.meters,
-    required this.estimate,
+    required this.delays,
+    required this.estimatedRoad,
   });
   final Duration remaining;
   final double meters;
-  final bool estimate;
+
+  /// Reported delays on the route are part of the time.
+  final bool delays;
+
+  /// The route's own time is estimated — local roads TomTom does not have.
+  final bool estimatedRoad;
 
   @override
   Widget build(BuildContext context) {
@@ -254,9 +265,15 @@ class _EtaRow extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
               Text(
-                // Said plainly, because the delay part is this app's own
-                // estimate rather than measured traffic.
-                estimate ? 'Includes reported delays' : 'Clear route',
+                // Said plainly, and precisely: which part of the time is
+                // this app's own estimate rather than measured traffic.
+                // It used to say "Includes reported delays" for a route with
+                // none, because its time was estimated for another reason.
+                delays
+                    ? 'Includes reported delays'
+                    : estimatedRoad
+                    ? 'Estimated time · local roads'
+                    : 'Clear route',
                 style: const TextStyle(
                   fontSize: 11,
                   color: AppTheme.textMuted,
@@ -268,6 +285,26 @@ class _EtaRow extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Why the shorter-looking way is not the one being driven.
+class _BlockedNote extends StatelessWidget {
+  const _BlockedNote({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      const Icon(Icons.block, size: 16, color: AppTheme.errorRed),
+      const SizedBox(width: AppSpacing.sm),
+      Expanded(
+        child: Text(
+          'Shorter way not used: $text',
+          style: const TextStyle(fontSize: 12, color: AppTheme.errorRed),
+        ),
+      ),
+    ],
+  );
 }
 
 /// Mutes and unmutes spoken guidance.

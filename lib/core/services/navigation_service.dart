@@ -18,11 +18,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../models/live_route.dart' show progressAlong, trimRouteTo;
 import '../models/navigation_state.dart';
 import '../models/road_report.dart';
 import '../models/trip_state.dart';
 import 'navigation_router.dart';
 import 'report_service.dart';
+import 'tomtom_router.dart';
 import 'traffic_incident_service.dart';
 
 /// The navigation fields as they appear on the booking document.
@@ -208,7 +210,10 @@ class NavigationService {
     final scored = await _scoredCandidates(from, to, conditions, now);
     if (scored.isEmpty) return null;
 
-    final choices = buildChoices(scored);
+    final choices = buildChoices(
+      scored,
+      maxShared: kMaxSharedWithRecommended,
+    );
     if (choices == null) return null;
 
     _choices = choices;
@@ -290,14 +295,13 @@ class NavigationService {
       // What is ahead on the road actually being driven, not only on the
       // fresh routes — that is the incident the driver is heading into.
       alsoAvoid: rescoredCurrent.incidentsOnRoute,
-      // Once the driver is on a way round, looking for another every 45 s
-      // would put several requests a minute on a free community server for
-      // an answer already in hand.
-      searchOsm: rescoredCurrent.isBlocked,
     );
     if (scored.isEmpty) return RerouteReason.none;
 
-    final choices = buildChoices(scored);
+    final choices = buildChoices(
+      scored,
+      maxShared: kMaxSharedWithRecommended,
+    );
     if (choices == null) return RerouteReason.none;
     // Refresh what the driver can switch to, so the options panel reflects
     // conditions now rather than when the leg started.
@@ -342,7 +346,6 @@ class NavigationService {
     _Conditions conditions,
     DateTime now, {
     List<RoadReport> alsoAvoid = const [],
-    bool searchOsm = true,
   }) async {
     final routes = await NavigationRouter.instance.routeWithAlternatives(
       from,
@@ -366,41 +369,75 @@ class NavigationService {
     // Minor reports alone are not worth a request: the driver keeps the
     // road and the delay goes into the ETA, which the scores above already
     // carry.
-    if (!worthLookingForDetour(trouble)) return scored;
+    if (worthLookingForDetour(trouble)) {
+      // One spot per place: two drivers reporting the same accident is one
+      // area to avoid, not two overlapping ones eating the request's limit.
+      final spots = <LatLng>[];
+      for (final r in trouble) {
+        if (spots.every((s) => distanceKm(s, r.location) > 0.1)) {
+          spots.add(r.location);
+        }
+      }
 
-    // One spot per place: two drivers reporting the same accident is one
-    // area to avoid, not two overlapping ones eating the request's limit.
-    final spots = <LatLng>[];
-    for (final r in trouble) {
-      if (spots.every((s) => distanceKm(s, r.location) > 0.1)) {
-        spots.add(r.location);
+      final detours = await NavigationRouter.instance.routeWithAlternatives(
+        from,
+        to,
+        maxAlternatives: 1,
+        avoid: spots,
+      );
+      for (final d in detours) {
+        if (!d.isRealRoute) continue;
+        // TomTom's times include measured traffic and OSRM's are free-flow.
+        // Should the avoiding request fall back to OSRM, its optimistic time
+        // would beat a TomTom route unfairly, so only like is compared with
+        // like.
+        if (d.isTrafficAware != best.route.isTrafficAware) continue;
+        if (scored.any((s) => s.route.sameRouteAs(d))) continue;
+        scored.add(conditions.score(d, now: now, from: from));
       }
     }
 
-    final detours = await NavigationRouter.instance.routeWithAlternatives(
-      from,
-      to,
-      maxAlternatives: 1,
-      avoid: spots,
-    );
-    for (final d in detours) {
-      if (!d.isRealRoute) continue;
-      // TomTom's times include measured traffic and OSRM's are free-flow.
-      // Should the avoiding request fall back to OSRM, its optimistic time
-      // would beat a TomTom route unfairly, so only like is compared with
-      // like.
-      if (d.isTrafficAware != best.route.isTrafficAware) continue;
-      if (scored.any((s) => s.route.sameRouteAs(d))) continue;
-      scored.add(conditions.score(d, now: now, from: from));
-    }
+    await _addOtherWays(scored, from, to, conditions, now);
+    return scored;
+  }
 
-    // TomTom avoids an area only where its own map has a way round. Where
-    // the way round is a barangay street it does not know, it hands back the
-    // same routes through the incident — and when the incident blocks the
-    // road, that sends the driver somewhere they cannot go. OpenStreetMap
-    // has those streets, so it is asked instead.
-    if (searchOsm && scored.every((s) => s.isBlocked)) {
-      final blockerSpots = <LatLng>[];
+  /// OpenStreetMap routes that go a genuinely different way, when TomTom
+  /// cannot provide them.
+  ///
+  /// Asked for in two situations. Every TomTom route is blocked — TomTom
+  /// avoids an area only where its own map has a way round, and where the
+  /// way round is a barangay street it does not know, it hands back the same
+  /// routes through the incident. Or TomTom's alternatives are the main way
+  /// again: on the Calantipay trip all three left on the same southern road,
+  /// while Apple Maps offered ways that differed from the start.
+  ///
+  /// Found at most every [_otherWaysLifetime] and reused in between, trimmed
+  /// to where the driver is now — the public OSRM server is a free community
+  /// service, and four requests every recalculation is not being a light
+  /// guest. A blocked route being driven always asks afresh.
+  Future<void> _addOtherWays(
+    List<RouteScore> scored,
+    LatLng from,
+    LatLng to,
+    _Conditions conditions,
+    DateTime now,
+  ) async {
+    if (!TomTomRouter.isConfigured) return; // OSRM already supplied these
+    final best = chooseBest(scored)!;
+    if (!best.route.isTrafficAware) return;
+
+    final allBlocked = scored.every((s) => s.isBlocked);
+    final distinct = scored.where(
+      (s) =>
+          !identical(s, best) &&
+          !s.isBlocked &&
+          sharedFraction(s.route.points, best.route.points) <=
+              kMaxSharedWithRecommended,
+    );
+    if (!allBlocked && distinct.length >= kMaxAlternatives) return;
+
+    final blockerSpots = <LatLng>[];
+    if (allBlocked) {
       for (final s in scored) {
         for (final r in s.blockers) {
           if (blockerSpots.every((p) => distanceKm(p, r.location) > 0.1)) {
@@ -408,30 +445,63 @@ class NavigationService {
           }
         }
       }
-      final osm = await NavigationRouter.instance.osmWaysAround(
+    }
+
+    final cached = _otherWays;
+    final fresh =
+        cached != null &&
+        now.difference(cached.at) < _otherWaysLifetime &&
+        cached.to == to &&
+        cached.blockedAt.length == blockerSpots.length;
+
+    List<NavRoute> ways;
+    if (fresh) {
+      // Trimmed to here, so each compares with routes fetched from here.
+      // One the driver has already turned away from is no longer a way.
+      ways = [
+        for (final w in cached.routes)
+          if (progressAlong(w.points, from) case final p?
+              when p.offRouteMeters <= kOffRouteMeters)
+            trimRouteTo(w, p),
+      ];
+    } else {
+      final osm = await NavigationRouter.instance.osmCorridors(
         from,
         to,
         avoid: blockerSpots,
       );
       final direct = osm.direct;
-      if (direct != null) {
-        final factor = trafficFactor(
-          measuredSeconds: best.route.durationSeconds,
-          freeFlowSeconds: direct.durationSeconds,
-        );
-        for (final way in osm.around) {
-          scored.add(
-            conditions.score(
-              way.withTrafficEstimate(factor),
-              now: now,
-              from: from,
-            ),
-          );
-        }
-      }
+      if (direct == null) return;
+      // Calibrated against TomTom's quickest route, even a blocked one: its
+      // time still measures how fast traffic is moving here.
+      final factor = trafficFactor(
+        measuredSeconds: best.route.durationSeconds,
+        measuredMeters: best.route.distanceMeters,
+        freeFlowSeconds: direct.durationSeconds,
+        freeFlowMeters: direct.distanceMeters,
+      );
+      ways = [for (final w in osm.routes) w.withTrafficEstimate(factor)];
+      _otherWays = (at: now, to: to, blockedAt: blockerSpots, routes: ways);
     }
-    return scored;
+
+    for (final w in ways) {
+      if (scored.any(
+        (s) =>
+            s.route.sameRouteAs(w) ||
+            sharedFraction(w.points, s.route.points) >
+                kMaxSharedBetweenAlternatives,
+      )) {
+        continue;
+      }
+      scored.add(conditions.score(w, now: now, from: from));
+    }
   }
+
+  /// How long ways found on OpenStreetMap are reused before asking again.
+  static const Duration _otherWaysLifetime = Duration(minutes: 2);
+
+  ({DateTime at, LatLng to, List<LatLng> blockedAt, List<NavRoute> routes})?
+  _otherWays;
 
   /// What is known about the roads near [origin]: what drivers reported, and
   /// what the live traffic feed measured.

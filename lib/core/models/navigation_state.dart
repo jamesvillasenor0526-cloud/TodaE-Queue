@@ -347,7 +347,19 @@ class RouteChoices {
   /// Slower complete routes, quickest first.
   final List<RouteScore> alternatives;
 
-  const RouteChoices({required this.recommended, this.alternatives = const []});
+  /// The quickest way that is blocked, when the recommendation is not it.
+  ///
+  /// Never offered — it cannot be driven — but shown, because otherwise the
+  /// driver looks at a longer route, sees the obvious road beside it, and
+  /// concludes the app is wrong. "Accident blocking the road" on that road
+  /// answers the question before it is asked.
+  final RouteScore? blocked;
+
+  const RouteChoices({
+    required this.recommended,
+    this.alternatives = const [],
+    this.blocked,
+  });
 
   /// The best of the alternatives, for places that show only one.
   RouteScore? get alternative => alternatives.isEmpty ? null : alternatives.first;
@@ -392,6 +404,9 @@ RouteChoices? buildChoices(
   Duration minDifference = const Duration(seconds: 30),
   double maxDetourFraction = kMaxDetourFraction,
   int maxAlternatives = kMaxAlternatives,
+  // 1.0 turns the check off, which keeps the geometry-free tests meaningful;
+  // navigation passes [kMaxSharedWithRecommended].
+  double maxShared = 1.0,
 }) {
   final best = chooseBest(candidates);
   if (best == null) return null;
@@ -419,10 +434,38 @@ RouteChoices? buildChoices(
     eligible.add(c);
   }
   eligible.sort((a, b) => a.adjustedSeconds.compareTo(b.adjustedSeconds));
-  return RouteChoices(
-    recommended: best,
-    alternatives: eligible.take(maxAlternatives).toList(),
-  );
+
+  // The quickest blocked way, to explain why the recommendation is not it.
+  final blockedWays = [
+    for (final c in candidates)
+      if (c.isBlocked && !best.isBlocked) c,
+  ]..sort((a, b) => a.route.durationSeconds.compareTo(b.route.durationSeconds));
+  final blocked = blockedWays.firstOrNull;
+
+  if (maxShared >= 1.0) {
+    return RouteChoices(
+      recommended: best,
+      alternatives: eligible.take(maxAlternatives).toList(),
+      blocked: blocked,
+    );
+  }
+
+  // Quickest first, keeping only ways that are genuinely different from the
+  // recommendation, and from each other.
+  final picked = <RouteScore>[];
+  for (final c in eligible) {
+    if (picked.length >= maxAlternatives) break;
+    if (sharedFraction(c.route.points, best.route.points) > maxShared) continue;
+    if (picked.any(
+      (p) =>
+          sharedFraction(c.route.points, p.route.points) >
+          kMaxSharedBetweenAlternatives,
+    )) {
+      continue;
+    }
+    picked.add(c);
+  }
+  return RouteChoices(recommended: best, alternatives: picked, blocked: blocked);
 }
 
 /// How many slower routes are offered beside the fastest.
@@ -451,21 +494,66 @@ double incidentDelaySeconds(ReportType type) => switch (type) {
   ReportType.trafficClear => 0,
 };
 
-/// How much slower measured traffic made a trip than a traffic-free
-/// estimate of it — the ratio used to put an OpenStreetMap route's time on
-/// the same footing as TomTom's.
+/// How much slower, per kilometre, TomTom finds travel here than OSRM's
+/// traffic-free estimate — the ratio used to put an OpenStreetMap route's
+/// time on the same footing as TomTom's.
 ///
-/// Bounded, because it is computed from two different routers' routes that
-/// need not be the same road: a factor of 10 from a mismatched pair would
-/// make a way round look like an hour, and 0.1 would make it look free.
-/// Measured over Baliwag in evening traffic it came out at 2.09.
+/// Compared per kilometre, not trip against trip. The two routers' routes
+/// are usually different roads: dividing TomTom's 5.8 km south route by
+/// OSRM's 6.6 km east one made OSRM's route come out, by construction,
+/// exactly as fast as TomTom's — so a route 13% longer tied with it. Pace
+/// against pace keeps the longer road longer.
+///
+/// Bounded, because a mismatched pair can still produce nonsense: 10 would
+/// make a way round look like an hour, 0.1 would make it look free.
 double trafficFactor({
   required double measuredSeconds,
+  required double measuredMeters,
   required double freeFlowSeconds,
+  required double freeFlowMeters,
 }) {
-  if (measuredSeconds <= 0 || freeFlowSeconds <= 0) return 1;
-  return (measuredSeconds / freeFlowSeconds).clamp(0.5, 4.0);
+  if (measuredSeconds <= 0 ||
+      measuredMeters <= 0 ||
+      freeFlowSeconds <= 0 ||
+      freeFlowMeters <= 0) {
+    return 1;
+  }
+  final measuredPace = measuredSeconds / measuredMeters;
+  final freeFlowPace = freeFlowSeconds / freeFlowMeters;
+  return (measuredPace / freeFlowPace).clamp(0.5, 4.0);
 }
+
+/// Share of [a]'s length that runs within [within] metres of [b].
+///
+/// What tells a genuinely different way from the main road with a variation
+/// on it. TomTom's alternatives from the Calantipay trip all left on the
+/// same southern road and split later; offered as "alternatives", they were
+/// the main way again.
+double sharedFraction(List<LatLng> a, List<LatLng> b, {double within = 25}) {
+  if (a.length < 2 || b.length < 2) return 0;
+  const d = Distance();
+  var shared = 0.0, total = 0.0;
+  for (var i = 1; i < a.length; i++) {
+    final length = d.as(LengthUnit.Meter, a[i - 1], a[i]);
+    total += length;
+    // The midpoint of each piece, so a long straight segment is judged by
+    // where it actually runs rather than only by its ends.
+    final mid = LatLng(
+      (a[i - 1].latitude + a[i].latitude) / 2,
+      (a[i - 1].longitude + a[i].longitude) / 2,
+    );
+    final near = nearestOnWay(b, mid)?.distanceMeters ?? double.infinity;
+    if (near <= within) shared += length;
+  }
+  return total <= 0 ? 0 : shared / total;
+}
+
+/// An alternative that shares more than this with the recommended route is
+/// the same way again, not another one.
+const double kMaxSharedWithRecommended = 0.7;
+
+/// Two alternatives that share more than this with each other are one.
+const double kMaxSharedBetweenAlternatives = 0.9;
 
 /// Whether [r] makes the road impassable at [now], rather than just slow.
 ///

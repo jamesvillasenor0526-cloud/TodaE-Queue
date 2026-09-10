@@ -180,6 +180,8 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
     final lines = [
       for (final s in _nav.choices?.all ?? [?_nav.route])
         ...s.route.points,
+      // Including the blocked way, so the driver can see why it is not taken.
+      ...?_nav.choices?.blocked?.route.points,
       ?_shownPos,
       ?_nav.target,
     ];
@@ -232,6 +234,31 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
     return out;
   }
 
+  /// The quickest way that is blocked, from the driver onwards, and where to
+  /// say why. Shown so the driver is not left wondering why the obvious road
+  /// is not the one being taken.
+  ({RouteScore score, List<LatLng> line, LatLng? label})? _blockedWay() {
+    final active = _nav.route, blocked = _nav.choices?.blocked, at = _shownPos;
+    if (active == null || blocked == null) return null;
+    var line = blocked.route.points;
+    if (at != null) {
+      final p = progressAlong(line, at);
+      if (p == null || p.offRouteMeters > kOffRouteMeters) return null;
+      line = remainingLine(line, p);
+    }
+    if (_blockedFor != blocked.route.key) {
+      _blockedFor = blocked.route.key;
+      // On the stretch the blocked way does not share with the route being
+      // driven — which is where the blockage is.
+      final spot = blocked.blockers.firstOrNull?.location;
+      _blockedLabel = spot ?? labelAnchor(blocked.route.points, active.route.points);
+    }
+    return (score: blocked, line: line, label: _blockedLabel);
+  }
+
+  String? _blockedFor;
+  LatLng? _blockedLabel;
+
   Map<String, LatLng?> _labelAnchors(
     RouteScore active,
     List<({RouteScore score, List<LatLng> line})> others,
@@ -242,7 +269,16 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
       _anchorsFor = key;
       _anchors = {
         for (final o in others)
-          o.score.route.key: labelAnchor(o.score.route.points, active.route.points),
+          o.score.route.key: labelAnchor(
+            o.score.route.points,
+            active.route.points,
+            // Each label where its route goes its own way, so two
+            // alternatives sharing a road do not stack their labels on it.
+            others: [
+              for (final x in others)
+                if (!identical(x, o)) x.score.route.points,
+            ],
+          ),
       };
     }
     return _anchors;
@@ -260,6 +296,7 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
         ? const <String, LatLng?>{}
         : _labelAnchors(active, others);
     final activeLine = _activeLine();
+    final blockedWay = _blockedWay();
 
     return Scaffold(
       body: Stack(
@@ -287,6 +324,15 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
               // fastest way reads first.
               PolylineLayer(
                 polylines: [
+                  // The blocked way, dashed and grey: visible, clearly not a
+                  // choice.
+                  if (blockedWay != null && blockedWay.line.length >= 2)
+                    Polyline(
+                      points: blockedWay.line,
+                      strokeWidth: 5,
+                      color: const Color(0xFF9E9E9E),
+                      pattern: StrokePattern.dashed(segments: const [12, 10]),
+                    ),
                   for (final o in others) ...[
                     Polyline(
                       points: o.line,
@@ -325,6 +371,16 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
               ),
               MarkerLayer(
                 markers: [
+                  if (blockedWay?.label != null)
+                    Marker(
+                      point: blockedWay!.label!,
+                      width: 190,
+                      height: 40,
+                      rotate: true,
+                      child: _BlockedLabel(
+                        text: blockedWay.score.conditionLabel,
+                      ),
+                    ),
                   if (target != null)
                     Marker(
                       point: target,
@@ -752,6 +808,43 @@ class _RouteLabel extends StatelessWidget {
             fontSize: 14,
           ),
         ),
+      ),
+    ),
+  );
+}
+
+/// Why the obvious road is not the one being taken. Not tappable: a blocked
+/// road is not a choice.
+class _BlockedLabel extends StatelessWidget {
+  const _BlockedLabel({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF3A3A3A),
+        borderRadius: BorderRadius.circular(10),
+        boxShadow: const [BoxShadow(blurRadius: 4, color: Colors.black26)],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.block, size: 16, color: Color(0xFFFF8A80)),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              text,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ],
       ),
     ),
   );

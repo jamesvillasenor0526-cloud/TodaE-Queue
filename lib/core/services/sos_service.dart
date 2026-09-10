@@ -71,6 +71,24 @@ class SosService {
     });
   }
 
+  /// [alertId] as the server has it now, bypassing the local cache.
+  ///
+  /// The live listener can die without saying so: on the first end-to-end
+  /// test, Firestore's stream closed ("Keepalive failed. The connection is
+  /// likely gone") and the admin's acknowledgement never reached the screen,
+  /// which went on saying "Waiting for one to respond". Asking the server
+  /// directly both fetches the current status and proves whether the phone
+  /// can reach it at all. Throws when it cannot.
+  Future<SosAlert> fetchFromServer(String alertId) async {
+    final snap = await _alerts
+        .doc(alertId)
+        .get(const GetOptions(source: Source.server))
+        .timeout(const Duration(seconds: 8));
+    final data = snap.data();
+    if (data == null) throw SosException('Alert not found.');
+    return SosAlert.fromMap(snap.id, data, toDate: _toDate);
+  }
+
   /// Raises an alert now.
   ///
   /// [delivered] is false when the server could not be reached in time: the

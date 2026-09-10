@@ -44,8 +44,13 @@ class _SosScreenState extends State<SosScreen>
   SosAlert? _shown;
   String? _closedNote;
 
-  /// Redraws the "updated N min ago" line.
+  /// Redraws the "updated N min ago" line, and checks the server.
   Timer? _clock;
+
+  /// Whether the last direct check reached the server. False means the
+  /// status on screen may be out of date, and the person is told so.
+  bool _serverReachable = true;
+  bool _checking = false;
 
   @override
   void initState() {
@@ -55,10 +60,40 @@ class _SosScreenState extends State<SosScreen>
       duration: const Duration(milliseconds: 1000),
     )..repeat(reverse: true);
     _sub = SosService.instance.watchMyOpenAlert().listen(_onAlert);
-    _clock = Timer.periodic(
-      const Duration(seconds: 15),
-      (_) => mounted ? setState(() {}) : null,
-    );
+    _clock = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (!mounted) return;
+      setState(() {}); // keeps "updated N min ago" honest
+      _checkServer();
+    });
+  }
+
+  /// Asks the server directly while an alert is open.
+  ///
+  /// The live listener alone is not enough: it can drop without notice and
+  /// leave the screen showing a status that has since changed. A direct
+  /// read picks up an admin's response regardless, and failing to get one
+  /// is itself worth telling the person.
+  Future<void> _checkServer() async {
+    final open = _alert;
+    if (open == null || _checking) return;
+    _checking = true;
+    try {
+      final fresh = await SosService.instance.fetchFromServer(open.id);
+      if (!mounted) return;
+      if (fresh.status.isOpen) {
+        setState(() {
+          _serverReachable = true;
+          _alert = fresh;
+        });
+      } else {
+        setState(() => _serverReachable = true);
+        _onAlert(null); // closed while the listener was not delivering
+      }
+    } catch (_) {
+      if (mounted) setState(() => _serverReachable = false);
+    } finally {
+      _checking = false;
+    }
   }
 
   void _onAlert(SosAlert? alert) {
@@ -237,6 +272,15 @@ class _SosScreenState extends State<SosScreen>
             text:
                 'No connection yet. Your alert is saved and will send by '
                 'itself when you have signal. Call 911 now.',
+          ),
+        ],
+        if (!_serverReachable && !(_queued && alert.triggeredAt == null)) ...[
+          const SizedBox(height: AppSpacing.md),
+          const _Notice(
+            icon: Icons.signal_wifi_bad,
+            text:
+                "Can't reach the server right now, so this status may be "
+                'out of date. Call 911 if you need help now.',
           ),
         ],
         const SizedBox(height: AppSpacing.lg),

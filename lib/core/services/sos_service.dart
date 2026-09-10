@@ -162,11 +162,20 @@ class SosService {
   // ---- Following an open alert --------------------------------------------
 
   StreamSubscription<Position>? _tracking;
+  Timer? _heartbeat;
   String? _trackingId;
   DateTime? _lastWrite;
 
   /// Writes are at most this frequent while following an alert.
   static const Duration _trackEvery = Duration(seconds: 10);
+
+  /// The longest a still phone goes without sending a fresh fix.
+  ///
+  /// The stream only reports movement of 15 m or more, so someone who has
+  /// stopped — held somewhere, or collapsed — sent nothing, and responders
+  /// saw "updated 3 min ago" on the second end-to-end test and could not
+  /// tell a person standing still from a phone that had gone quiet.
+  static const Duration _heartbeatEvery = Duration(minutes: 1);
 
   /// Keeps [alertId]'s location current while it is open. Safe to call
   /// repeatedly — the SOS screen and the SOS button both do.
@@ -190,17 +199,42 @@ class SosService {
       if (_lastWrite != null && now.difference(_lastWrite!) < _trackEvery) {
         return;
       }
-      _lastWrite = now;
-      _alerts
-          .doc(alertId)
-          .update(_locationFields(p, SosLocationSource.gps))
-          .catchError((Object e) => debugPrint('SOS: location update: $e'));
+      _writeLocation(alertId, p);
     }, onError: (Object e) => debugPrint('SOS: tracking error: $e'));
+    _heartbeat = Timer.periodic(_heartbeatEvery, (_) async {
+      final last = _lastWrite;
+      if (last != null &&
+          DateTime.now().difference(last) < _heartbeatEvery - _trackEvery) {
+        return; // moving, so the stream is already writing
+      }
+      try {
+        // A fresh fix, not the cached one: its own timestamp is what says
+        // "updated just now", so resending an old fix would prove nothing.
+        final p = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+          ),
+        ).timeout(const Duration(seconds: 20));
+        if (_trackingId == alertId) _writeLocation(alertId, p);
+      } catch (e) {
+        debugPrint('SOS: heartbeat fix: $e');
+      }
+    });
+  }
+
+  void _writeLocation(String alertId, Position p) {
+    _lastWrite = DateTime.now();
+    _alerts
+        .doc(alertId)
+        .update(_locationFields(p, SosLocationSource.gps))
+        .catchError((Object e) => debugPrint('SOS: location update: $e'));
   }
 
   void stopTracking() {
     _tracking?.cancel();
     _tracking = null;
+    _heartbeat?.cancel();
+    _heartbeat = null;
     _trackingId = null;
     _lastWrite = null;
   }

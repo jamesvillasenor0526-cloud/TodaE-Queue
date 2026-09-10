@@ -67,10 +67,11 @@ class _SosButtonState extends State<SosButton>
         Navigator.pushNamed(context, AppRoutes.sos);
       },
       backgroundColor: open ? const Color(0xFF8B0000) : AppTheme.errorRed,
-      icon: Icon(
-        open ? Icons.warning_amber_rounded : Icons.sos,
-        color: Colors.white,
-      ),
+      // Icons.sos is drawn as the letters "SOS", which beside the label read
+      // "SOS SOS"; the idle button is the word alone.
+      icon: open
+          ? const Icon(Icons.warning_amber_rounded, color: Colors.white)
+          : null,
       label: Text(
         open ? 'SOS ACTIVE' : 'SOS',
         style: const TextStyle(

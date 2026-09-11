@@ -51,14 +51,15 @@ class TomTomRouter {
     LatLng to, {
     int maxAlternatives = 2,
     List<LatLng> avoid = const [],
+    double? heading,
   }) async {
     if (!isConfigured) return const [];
 
     final uri = Uri.https(
       _host,
       '/routing/1/calculateRoute/'
-          '${from.latitude},${from.longitude}:'
-          '${to.latitude},${to.longitude}/json',
+      '${from.latitude},${from.longitude}:'
+      '${to.latitude},${to.longitude}/json',
       {
         'key': ApiKeys.tomTom,
         // 0–5. Asking for more than we will show wastes the daily quota.
@@ -70,6 +71,12 @@ class TomTomRouter {
         // narrow roads without being treated as a car on highways.
         'travelMode': 'motorcycle',
         'instructionsType': 'text',
+        // Which way the tricycle is moving, so the route sets off ahead of
+        // it. Without it a route from a moving driver could start by going
+        // back the way they came: tested on B.S. Aquino Avenue facing
+        // north, TomTom set off south (173°) without the heading and north
+        // (352°) with it.
+        if (heading != null) 'vehicleHeading': '${heading.round() % 360}',
       },
     );
 
@@ -200,8 +207,7 @@ List<NavRoute> parseTomTomRoutes(String body) {
           // travelled on this one, which is what OSRM's steps mean too.
           final here = (i['routeOffsetInMeters'] as num?)?.toDouble() ?? 0;
           final next = n + 1 < instructions.length
-              ? (instructions[n + 1]['routeOffsetInMeters'] as num?)
-                    ?.toDouble()
+              ? (instructions[n + 1]['routeOffsetInMeters'] as num?)?.toDouble()
               : null;
 
           steps.add(
@@ -237,9 +243,7 @@ List<NavRoute> parseTomTomRoutes(String body) {
                   ?.toDouble() ??
               0,
           trafficDelaySeconds:
-              (summary is Map
-                      ? summary['trafficDelayInSeconds'] as num?
-                      : null)
+              (summary is Map ? summary['trafficDelayInSeconds'] as num? : null)
                   ?.toDouble() ??
               0,
           steps: steps,

@@ -89,11 +89,10 @@ class TripNavigation {
           : null,
       driverLocationAt: toDate?.call(data['driverLocationAt']),
       rerouteMessage: data['rerouteMessage'] as String?,
-      phase:
-          NavigationPhase.values.firstWhere(
-            (p) => p.name == data['navigationPhase'],
-            orElse: () => NavigationPhase.idle,
-          ),
+      phase: NavigationPhase.values.firstWhere(
+        (p) => p.name == data['navigationPhase'],
+        orElse: () => NavigationPhase.idle,
+      ),
     );
   }
 }
@@ -199,21 +198,30 @@ class NavigationService {
   }
 
   /// Establishes the route for a leg, replacing whatever was being driven.
+  ///
+  /// [heading] and [speed] are the driver's course and speed, when moving,
+  /// so the route sets off ahead of them rather than behind.
   Future<RouteScore?> startLeg({
     required String bookingId,
     required LatLng from,
     required LatLng to,
+    double? heading,
+    double speed = 0,
   }) async {
     _offRoute.reset();
     final now = DateTime.now();
     final conditions = await _conditionsNear(from);
-    final scored = await _scoredCandidates(from, to, conditions, now);
+    final scored = await _scoredCandidates(
+      from,
+      to,
+      conditions,
+      now,
+      heading: heading,
+      speed: speed,
+    );
     if (scored.isEmpty) return null;
 
-    final choices = buildChoices(
-      scored,
-      maxShared: kMaxSharedWithRecommended,
-    );
+    final choices = buildChoices(scored, maxShared: kMaxSharedWithRecommended);
     if (choices == null) return null;
 
     _choices = choices;
@@ -251,6 +259,8 @@ class NavigationService {
     required LatLng position,
     required LatLng target,
     required NavigationPhase phase,
+    double? heading,
+    double speed = 0,
   }) async {
     await publishLocation(
       bookingId: bookingId,
@@ -260,14 +270,25 @@ class NavigationService {
 
     final current = _current;
     if (current == null) {
-      await startLeg(bookingId: bookingId, from: position, to: target);
+      await startLeg(
+        bookingId: bookingId,
+        from: position,
+        to: target,
+        heading: heading,
+        speed: speed,
+      );
       return RerouteReason.none;
     }
 
     // Keep the passenger's ETA moving even when nothing is recalculated.
     await _publishProgress(bookingId, current, position);
 
-    final wentOffRoute = _offRoute.update(current.route, position);
+    final wentOffRoute = _offRoute.update(
+      current.route,
+      position,
+      heading: heading,
+      speed: speed,
+    );
     final now = DateTime.now();
     final due =
         _lastRecalc == null ||
@@ -295,13 +316,12 @@ class NavigationService {
       // What is ahead on the road actually being driven, not only on the
       // fresh routes — that is the incident the driver is heading into.
       alsoAvoid: rescoredCurrent.incidentsOnRoute,
+      heading: heading,
+      speed: speed,
     );
     if (scored.isEmpty) return RerouteReason.none;
 
-    final choices = buildChoices(
-      scored,
-      maxShared: kMaxSharedWithRecommended,
-    );
+    final choices = buildChoices(scored, maxShared: kMaxSharedWithRecommended);
     if (choices == null) return RerouteReason.none;
     // Refresh what the driver can switch to, so the options panel reflects
     // conditions now rather than when the leg started.
@@ -346,10 +366,15 @@ class NavigationService {
     _Conditions conditions,
     DateTime now, {
     List<RoadReport> alsoAvoid = const [],
+    double? heading,
+    double speed = 0,
   }) async {
+    // The course only when it can be trusted; see kMovingSpeed.
+    final course = speed >= kMovingSpeed ? heading : null;
     final routes = await NavigationRouter.instance.routeWithAlternatives(
       from,
       to,
+      heading: course,
     );
     final scored = [
       for (final r in routes) conditions.score(r, now: now, from: from),
@@ -360,11 +385,12 @@ class NavigationService {
     // Keyed by id: a report on both the fresh route and the one being driven
     // is one report, and summing it twice would push minor delays over the
     // threshold below.
-    final trouble = <String, RoadReport>{
-      for (final r in [...best.incidentsOnRoute, ...alsoAvoid])
-        if (conditions.costsTime(r)) r.id: r,
-    }.values.toList()
-      ..sort((a, b) => b.type.severity.compareTo(a.type.severity));
+    final trouble =
+        <String, RoadReport>{
+            for (final r in [...best.incidentsOnRoute, ...alsoAvoid])
+              if (conditions.costsTime(r)) r.id: r,
+          }.values.toList()
+          ..sort((a, b) => b.type.severity.compareTo(a.type.severity));
 
     // Minor reports alone are not worth a request: the driver keeps the
     // road and the delay goes into the ETA, which the scores above already
@@ -384,6 +410,7 @@ class NavigationService {
         to,
         maxAlternatives: 1,
         avoid: spots,
+        heading: course,
       );
       for (final d in detours) {
         if (!d.isRealRoute) continue;
@@ -398,7 +425,15 @@ class NavigationService {
     }
 
     await _addOtherWays(scored, from, to, conditions, now);
-    return scored;
+    // Whatever supplied them — TomTom, an avoiding request, OpenStreetMap,
+    // or ways cached from a moment ago — none that starts by going back
+    // the way the driver came, unless there is nothing else.
+    return keepThoseAhead(
+      scored,
+      (s) => s.route,
+      heading: heading,
+      speed: speed,
+    );
   }
 
   /// OpenStreetMap routes that go a genuinely different way, when TomTom

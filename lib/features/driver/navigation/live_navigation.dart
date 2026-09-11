@@ -28,10 +28,12 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../core/models/live_route.dart';
+import '../../../core/models/location_need.dart';
 import '../../../core/models/navigation_state.dart';
 import '../../../core/models/road_report.dart';
 import '../../../core/models/trip_state.dart';
 import '../../../core/models/voice_guidance.dart';
+import '../../../core/services/location_hub.dart';
 import '../../../core/services/navigation_service.dart';
 import '../../../core/services/voice_service.dart';
 
@@ -60,12 +62,12 @@ class LiveNavigation extends ChangeNotifier {
   String? get bookingId => _bookingId;
   bool get isRunning => _holders > 0 && _bookingId != null;
 
-  NavigationPhase get phase =>
-      _trip == null ? NavigationPhase.idle : NavigationPhase.forTrip(_trip!.trip);
+  NavigationPhase get phase => _trip == null
+      ? NavigationPhase.idle
+      : NavigationPhase.forTrip(_trip!.trip);
 
-  LatLng? get target => _trip == null
-      ? null
-      : NavigationService.targetFor(_trip!, _booking);
+  LatLng? get target =>
+      _trip == null ? null : NavigationService.targetFor(_trip!, _booking);
 
   // ---- Position ----------------------------------------------------------
 
@@ -148,6 +150,18 @@ class LiveNavigation extends ChangeNotifier {
   /// if it persists.
   bool get isOffRoute =>
       _progress != null && _progress!.offRouteMeters > kOffRouteMeters;
+
+  /// Moving against the route's direction — turned round, or never facing
+  /// its way. On the route's own road, so [isOffRoute] does not see it.
+  bool get isGoingWrongWay {
+    final r = _route, p = _position;
+    if (r == null || p == null) return false;
+    return isAgainstRoute(
+      heading: _gpsHeading,
+      speed: _speed,
+      roadBearing: routeDirectionNear(r.route.points, p),
+    );
+  }
 
   bool get arrived {
     final p = _position, t = target;
@@ -260,20 +274,25 @@ class LiveNavigation extends ChangeNotifier {
     // arrow moves smoothly and the line visibly shortens, which a 10 m
     // filter did not give. The routing throttle keeps Firestore writes to
     // one every few seconds regardless.
-    final settings = defaultTargetPlatform == TargetPlatform.android
-        ? AndroidSettings(
-            accuracy: LocationAccuracy.bestForNavigation,
+    //
+    // From the shared stream. Asking the plugin directly, as this did, was
+    // silently ignored whenever the home screen's stream was already
+    // running — always, on a driver's phone — and a real drive got a
+    // reading every 5 s instead.
+    _positions = LocationHub.instance
+        .watch(
+          const LocationNeed(
+            interval: Duration(seconds: 1),
             distanceFilter: 2,
-            intervalDuration: const Duration(seconds: 1),
-          )
-        : const LocationSettings(
             accuracy: LocationAccuracy.bestForNavigation,
-            distanceFilter: 2,
-          );
-    _positions = Geolocator.getPositionStream(locationSettings: settings)
-        .listen(_onFix, onError: (Object e) {
-          debugPrint('Navigation GPS error: $e');
-        });
+          ),
+        )
+        .listen(
+          _onFix,
+          onError: (Object e) {
+            debugPrint('Navigation GPS error: $e');
+          },
+        );
 
     // The stream only emits after movement, so a phone standing still
     // produces nothing — and a driver waiting at a terminal is exactly that.
@@ -366,12 +385,19 @@ class LiveNavigation extends ChangeNotifier {
     final last = _lastRoutingAt;
     final moved = _lastRoutingPosition == null
         ? double.infinity
-        : const Distance().as(LengthUnit.Meter, _lastRoutingPosition!, position);
+        : const Distance().as(
+            LengthUnit.Meter,
+            _lastRoutingPosition!,
+            position,
+          );
     final due =
         last == null ||
         now.difference(last) >= kRoutingInterval ||
         moved >= kRoutingDistanceMeters ||
-        isOffRoute;
+        isOffRoute ||
+        // Every reading while going against the route, so the three in a
+        // row that trigger a reroute take three seconds, not nine.
+        isGoingWrongWay;
     if (!due) return;
 
     _lastRoutingAt = now;
@@ -388,6 +414,8 @@ class LiveNavigation extends ChangeNotifier {
         position: position,
         target: target,
         phase: phase,
+        heading: _gpsHeading,
+        speed: _speed,
       );
       _route = NavigationService.instance.currentRoute;
       _choices = NavigationService.instance.choices;
@@ -412,6 +440,8 @@ class LiveNavigation extends ChangeNotifier {
         bookingId: id,
         from: position,
         to: t,
+        heading: _gpsHeading,
+        speed: _speed,
       );
       _choices = NavigationService.instance.choices;
       _advance();

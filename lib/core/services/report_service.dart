@@ -7,8 +7,10 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../models/location_fix.dart';
+import '../models/location_need.dart';
 import '../models/road_report.dart';
 import 'cloudinary_service.dart';
+import 'location_hub.dart';
 import 'traffic_incident_service.dart';
 
 /// Raised when a report can't be submitted. The message is safe to show.
@@ -93,13 +95,10 @@ class ReportService {
             .orderBy('createdAt', descending: true)
             .limit(200)
             .snapshots()
-            .listen(
-              (snap) {
-                latest = snap.docs.map(_fromDoc).toList();
-                emit();
-              },
-              onError: controller.addError,
-            );
+            .listen((snap) {
+              latest = snap.docs.map(_fromDoc).toList();
+              emit();
+            }, onError: controller.addError);
         ticker = Timer.periodic(const Duration(minutes: 1), (_) => emit());
       },
       onCancel: () async {
@@ -163,12 +162,17 @@ class ReportService {
 
       if (isStaleFix(pos.timestamp, DateTime.now())) {
         try {
-          pos = await Geolocator.getPositionStream(
-            locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.high,
-              distanceFilter: 0,
-            ),
-          ).firstWhere((p) => !isStaleFix(p.timestamp, DateTime.now()))
+          // From the shared stream: the plugin allows only one, and a
+          // stream of its own here would have been handed back whatever
+          // pace was already running.
+          pos = await LocationHub.instance
+              .watch(
+                const LocationNeed(
+                  interval: Duration(seconds: 1),
+                  distanceFilter: 0,
+                ),
+              )
+              .firstWhere((p) => !isStaleFix(p.timestamp, DateTime.now()))
               .timeout(const Duration(seconds: 6));
         } catch (_) {
           // No fresh reading in time; keep the stale one and say how old.

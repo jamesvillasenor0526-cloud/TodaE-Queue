@@ -113,9 +113,8 @@ class NavStep {
         'right' => 'Keep right$where',
         _ => 'Keep going$where',
       },
-      'new name' || 'continue' => road.isEmpty
-          ? 'Continue straight'
-          : 'Continue on $road',
+      'new name' ||
+      'continue' => road.isEmpty ? 'Continue straight' : 'Continue on $road',
       _ => switch (modifier) {
         'left' || 'slight left' || 'sharp left' => 'Turn left$where',
         'right' || 'slight right' || 'sharp right' => 'Turn right$where',
@@ -362,7 +361,8 @@ class RouteChoices {
   });
 
   /// The best of the alternatives, for places that show only one.
-  RouteScore? get alternative => alternatives.isEmpty ? null : alternatives.first;
+  RouteScore? get alternative =>
+      alternatives.isEmpty ? null : alternatives.first;
 
   /// Every route on offer, recommended first.
   List<RouteScore> get all => [recommended, ...alternatives];
@@ -374,9 +374,8 @@ class RouteChoices {
   Duration? get alternativeCost => alternative == null
       ? null
       : Duration(
-          seconds:
-              (alternative!.adjustedSeconds - recommended.adjustedSeconds)
-                  .round(),
+          seconds: (alternative!.adjustedSeconds - recommended.adjustedSeconds)
+              .round(),
         );
 }
 
@@ -465,7 +464,11 @@ RouteChoices? buildChoices(
     }
     picked.add(c);
   }
-  return RouteChoices(recommended: best, alternatives: picked, blocked: blocked);
+  return RouteChoices(
+    recommended: best,
+    alternatives: picked,
+    blocked: blocked,
+  );
 }
 
 /// How many slower routes are offered beside the fastest.
@@ -737,6 +740,96 @@ const double kOffRouteMeters = 60;
 /// GPS reading does not trigger a reroute.
 const int kOffRouteFixes = 3;
 
+/// Moving at least this fast (m/s, about 11 km/h), the GPS course is the way
+/// the driver is actually going. Slower, it wanders, and standing still it
+/// says nothing at all.
+const double kMovingSpeed = 3;
+
+/// A course this far from the road's direction is travel against the route.
+const double kWrongWayDegrees = 135;
+
+/// How far along a route its starting direction is judged over.
+const double kSetOffMeters = 40;
+
+double _bearing(LatLng a, LatLng b) {
+  final lat1 = a.latitude * math.pi / 180, lat2 = b.latitude * math.pi / 180;
+  final dLng = (b.longitude - a.longitude) * math.pi / 180;
+  final y = math.sin(dLng) * math.cos(lat2);
+  final x =
+      math.cos(lat1) * math.sin(lat2) -
+      math.sin(lat1) * math.cos(lat2) * math.cos(dLng);
+  return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+}
+
+double _angleBetween(double a, double b) {
+  final d = ((a - b) % 360 + 360) % 360;
+  return d > 180 ? 360 - d : d;
+}
+
+/// Whether a driver going [speed] m/s on course [heading] is travelling
+/// against a road running [roadBearing]. False whenever the course cannot be
+/// trusted — too slow, or no heading.
+bool isAgainstRoute({
+  required double? heading,
+  required double speed,
+  required double? roadBearing,
+}) {
+  if (heading == null || roadBearing == null || speed < kMovingSpeed) {
+    return false;
+  }
+  return _angleBetween(heading, roadBearing) > kWrongWayDegrees;
+}
+
+/// The route's direction of travel at the point nearest [position].
+double? routeDirectionNear(List<LatLng> points, LatLng position) {
+  final hit = nearestOnWay(points, position);
+  if (hit == null) return null;
+  final i = hit.index.clamp(0, points.length - 2);
+  if (points[i] == points[i + 1]) return null;
+  return _bearing(points[i], points[i + 1]);
+}
+
+/// The way [route] sets off: the bearing over its first [kSetOffMeters].
+double? setOffBearing(NavRoute route) {
+  final pts = route.points;
+  if (pts.length < 2) return null;
+  const d = Distance();
+  for (var i = 1; i < pts.length; i++) {
+    if (d.as(LengthUnit.Meter, pts.first, pts[i]) >= kSetOffMeters) {
+      return _bearing(pts.first, pts[i]);
+    }
+  }
+  return pts.first == pts.last ? null : _bearing(pts.first, pts.last);
+}
+
+/// [candidates] without those that set off against the driver's course —
+/// unless that is all of them, when nothing is dropped: a U-turn route
+/// beats no route.
+///
+/// A route that starts by going back the way the driver came is drawn
+/// behind the arrow, and the driver pulls further from it every second. On
+/// a recorded drive north along B.S. Aquino Avenue with the destination
+/// south, every route set off south, the line trailed behind the arrow, and
+/// it caught up only when the next recalculation started a new one.
+List<T> keepThoseAhead<T>(
+  List<T> candidates,
+  NavRoute Function(T) routeOf, {
+  required double? heading,
+  required double speed,
+}) {
+  if (heading == null || speed < kMovingSpeed) return candidates;
+  final ahead = [
+    for (final c in candidates)
+      if (!isAgainstRoute(
+        heading: heading,
+        speed: speed,
+        roadBearing: setOffBearing(routeOf(c)),
+      ))
+        c,
+  ];
+  return ahead.isEmpty ? candidates : ahead;
+}
+
 /// Whether [current] should be replaced by [candidate].
 ///
 /// [driverPickedRoute] means the driver deliberately chose this route over
@@ -785,10 +878,25 @@ class OffRouteDetector {
 
   /// Feeds one position. Returns true when the driver should be considered
   /// off-route and the route recalculated.
-  bool update(NavRoute route, LatLng position) {
+  ///
+  /// Travelling against the route counts as leaving it, even on the line
+  /// itself. A driver who has turned round — or never faced the route's way
+  /// — is on its road but not following it, and waiting until they were
+  /// 60 m clear took the recorded drive 25 s to recalculate.
+  bool update(
+    NavRoute route,
+    LatLng position, {
+    double? heading,
+    double speed = 0,
+  }) {
     final offset = distanceFromRoute(route, position);
     if (offset == null) return false;
-    if (offset <= kOffRouteMeters) {
+    final against = isAgainstRoute(
+      heading: heading,
+      speed: speed,
+      roadBearing: routeDirectionNear(route.points, position),
+    );
+    if (offset <= kOffRouteMeters && !against) {
       _consecutive = 0;
       return false;
     }

@@ -13,7 +13,9 @@ import 'widgets/trip_status_card.dart';
 import 'widgets/driver_eta_card.dart';
 import '../../../core/models/glide.dart';
 import '../../../core/models/location_fix.dart';
+import '../../../core/models/location_need.dart';
 import '../../../core/models/trip_state.dart';
+import '../../../core/services/location_hub.dart';
 import '../../../core/services/trip_service.dart';
 import '../../shared/reports/report_map_layer.dart';
 import '../../shared/navigation/gliding_marker_layer.dart';
@@ -105,13 +107,13 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
         );
       }
     } catch (_) {}
-    _positionStream =
-        Geolocator.getPositionStream(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            distanceFilter: 5,
-          ),
-        ).listen((Position p) {
+    // From the app's shared stream: the plugin runs only one, and a request
+    // of its own here would be handed whatever pace was already set.
+    _positionStream = LocationHub.instance
+        .watch(
+          const LocationNeed(interval: Duration(seconds: 2), distanceFilter: 5),
+        )
+        .listen((Position p) {
           if (mounted) {
             setState(
               () => _passengerPosition = LatLng(p.latitude, p.longitude),

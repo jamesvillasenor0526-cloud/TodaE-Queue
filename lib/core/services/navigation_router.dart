@@ -57,6 +57,7 @@ class NavigationRouter {
     LatLng to, {
     int maxAlternatives = 2,
     List<LatLng> avoid = const [],
+    double? heading,
   }) async {
     // TomTom returns genuine alternatives and traffic-aware times, so when
     // a key is configured there is nothing to force with detour waypoints.
@@ -69,6 +70,9 @@ class NavigationRouter {
         // OSRM fallback, so on TomTom a reported incident could be ranked
         // against but never actually routed around.
         avoid: avoid,
+        // OSRM below has no such option here; routes from it that set off
+        // backwards are dropped by the caller instead (keepThoseAhead).
+        heading: heading,
       );
       if (fromTomTom.isNotEmpty) return fromTomTom;
       // Key present but the call failed or was over quota: fall through to
@@ -158,7 +162,11 @@ class NavigationRouter {
     final span = _degreesBetween(from, to);
     final pushed = await Future.wait([
       for (final offset in const [0.15, -0.15, 0.3, -0.3])
-        _through(from, to, _perpendicularOffset(from, to, pivot, span * offset)),
+        _through(
+          from,
+          to,
+          _perpendicularOffset(from, to, pivot, span * offset),
+        ),
     ]);
 
     final candidates = [direct, ...pushed.whereType<NavRoute>()]
@@ -191,7 +199,11 @@ class NavigationRouter {
   /// route rejoins, which it can pass without the spur. Anything that still
   /// loops is dropped: a route that tells a driver to go up a street and
   /// back is not one to offer.
-  Future<NavRoute?> _withoutLoop(LatLng from, LatLng to, NavRoute? route) async {
+  Future<NavRoute?> _withoutLoop(
+    LatLng from,
+    LatLng to,
+    NavRoute? route,
+  ) async {
     if (route == null) return null;
     final loop = findLoop(route.points);
     if (loop == null) return route;
@@ -204,9 +216,7 @@ class NavigationRouter {
   }
 
   Future<NavRoute?> _request(List<LatLng> waypoints) async {
-    final path = waypoints
-        .map((p) => '${p.longitude},${p.latitude}')
-        .join(';');
+    final path = waypoints.map((p) => '${p.longitude},${p.latitude}').join(';');
     final uri = Uri.parse(
       '$_base$path?overview=full&geometries=geojson&steps=true',
     );
@@ -226,10 +236,8 @@ class NavigationRouter {
     }
   }
 
-  LatLng _midpoint(LatLng a, LatLng b) => LatLng(
-    (a.latitude + b.latitude) / 2,
-    (a.longitude + b.longitude) / 2,
-  );
+  LatLng _midpoint(LatLng a, LatLng b) =>
+      LatLng((a.latitude + b.latitude) / 2, (a.longitude + b.longitude) / 2);
 
   double _degreesBetween(LatLng a, LatLng b) => math.sqrt(
     math.pow(b.latitude - a.latitude, 2) +
@@ -238,12 +246,7 @@ class NavigationRouter {
 
   /// A point [amount] degrees to the side of the line from [a] to [b],
   /// measured out from [pivot].
-  LatLng _perpendicularOffset(
-    LatLng a,
-    LatLng b,
-    LatLng pivot,
-    double amount,
-  ) {
+  LatLng _perpendicularOffset(LatLng a, LatLng b, LatLng pivot, double amount) {
     final dx = b.longitude - a.longitude;
     final dy = b.latitude - a.latitude;
     final length = math.sqrt(dx * dx + dy * dy);
@@ -303,9 +306,7 @@ NavRoute? parseOsrmRoute(String body) {
             maneuver: maneuver is Map
                 ? (maneuver['type'] as String? ?? '')
                 : '',
-            modifier: maneuver is Map
-                ? maneuver['modifier'] as String?
-                : null,
+            modifier: maneuver is Map ? maneuver['modifier'] as String? : null,
             distanceMeters: (step['distance'] as num?)?.toDouble() ?? 0,
           ),
         );

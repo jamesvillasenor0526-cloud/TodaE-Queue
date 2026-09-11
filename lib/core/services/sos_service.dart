@@ -19,8 +19,10 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../models/location_need.dart';
 import '../models/sos_alert.dart';
 import '../models/trip_state.dart';
+import 'location_hub.dart';
 
 class SosException implements Exception {
   final String message;
@@ -205,40 +207,30 @@ class SosService {
   Future<void> _startTracking(String alertId) async {
     if (!await _locationAllowed()) return;
     if (_trackingId != alertId) return;
-    // On Android the interval must be asked for: left to itself the system
-    // delivered a reading only every 5 s, whatever the write rate, which is
-    // what the first live-map test measured.
-    final settings = defaultTargetPlatform == TargetPlatform.android
-        ? AndroidSettings(
-            accuracy: LocationAccuracy.high,
-            distanceFilter: 3,
-            intervalDuration: const Duration(seconds: 1),
-          )
-        : const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            distanceFilter: 3,
-          );
-    _tracking = Geolocator.getPositionStream(locationSettings: settings).listen(
-      (p) {
-        // A reading that comes too soon is held and sent when the window
-        // ends, not dropped: dropping it halved the rate on the first
-        // test, and the last reading before stopping is where they are.
-        _held = p;
-        if (_holdTimer?.isActive ?? false) return;
-        final last = _lastWrite;
-        final wait = last == null
-            ? Duration.zero
-            : _trackEvery - DateTime.now().difference(last);
-        _holdTimer = Timer(wait.isNegative ? Duration.zero : wait, () {
-          final held = _held;
-          _held = null;
-          if (held != null && _trackingId == alertId) {
-            _writeLocation(alertId, held);
-          }
-        });
-      },
-      onError: (Object e) => debugPrint('SOS: tracking error: $e'),
-    );
+    // A reading a second, from the shared stream: on its own request the
+    // plugin gave whatever pace the first stream of the day had set.
+    _tracking = LocationHub.instance
+        .watch(
+          const LocationNeed(interval: Duration(seconds: 1), distanceFilter: 3),
+        )
+        .listen((p) {
+          // A reading that comes too soon is held and sent when the window
+          // ends, not dropped: dropping it halved the rate on the first
+          // test, and the last reading before stopping is where they are.
+          _held = p;
+          if (_holdTimer?.isActive ?? false) return;
+          final last = _lastWrite;
+          final wait = last == null
+              ? Duration.zero
+              : _trackEvery - DateTime.now().difference(last);
+          _holdTimer = Timer(wait.isNegative ? Duration.zero : wait, () {
+            final held = _held;
+            _held = null;
+            if (held != null && _trackingId == alertId) {
+              _writeLocation(alertId, held);
+            }
+          });
+        }, onError: (Object e) => debugPrint('SOS: tracking error: $e'));
     _heartbeat = Timer.periodic(_heartbeatEvery, (_) async {
       final last = _lastWrite;
       if (last != null &&

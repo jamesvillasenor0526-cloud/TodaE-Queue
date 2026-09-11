@@ -1,3 +1,14 @@
+import java.io.FileInputStream
+import java.util.Properties
+
+// The release signing key, from android/key.properties (never committed; see
+// android/.gitignore). Every build shared with drivers must be signed with
+// this same key, or phones refuse the update until the app is uninstalled.
+val keystorePropertiesFile = rootProject.file("key.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) load(FileInputStream(keystorePropertiesFile))
+}
+
 plugins {
     id("com.android.application")
     // START: FlutterFire Configuration
@@ -19,8 +30,9 @@ android {
     }   
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.toda_equeue_plus"
+        // Permanent: the Play Store and every installed copy know the app by
+        // this. The namespace above is only the code's package and can stay.
+        applicationId = "com.todaequeue.plus"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -29,11 +41,30 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (keystorePropertiesFile.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                // A machine without the key still builds, but the result
+                // cannot update copies already on drivers' phones.
+                logger.warn(
+                    "android/key.properties not found: release build signed " +
+                        "with the DEBUG key. Do not share this APK.",
+                )
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }

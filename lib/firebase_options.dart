@@ -54,7 +54,9 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyCOMRbkEaGvcYZPhkQNijQNjTCY4GEDUbA',
-    appId: '1:531938668869:android:f29ff288d713b8a53dce2c',
+    // com.todaequeue.plus. The app registered as com.example.toda_equeue_plus
+    // was 1:531938668869:android:f29ff288d713b8a53dce2c.
+    appId: '1:531938668869:android:e83f0a89b4df11053dce2c',
     messagingSenderId: '531938668869',
     projectId: 'toda-equeue-app',
     storageBucket: 'toda-equeue-app.firebasestorage.app',

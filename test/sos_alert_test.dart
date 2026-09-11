@@ -134,7 +134,10 @@ void main() {
           'bodyNumber': '45',
         },
       });
-      expect(a.trip!.vehicleLine, 'Plate ABC 123 · Body #45 · Driver Juan Dela Cruz');
+      expect(
+        a.trip!.vehicleLine,
+        'Plate ABC 123 · Body #45 · Driver Juan Dela Cruz',
+      );
     });
 
     test('says only what is known', () {
@@ -147,8 +150,111 @@ void main() {
 
     test('a malformed trip is ignored rather than crashing', () {
       expect(alert({'status': 'active', 'trip': 'oops'}).trip, isNull);
-      expect(alert({'status': 'active', 'trip': {'driverName': 'x'}}).trip, isNull);
+      expect(
+        alert({
+          'status': 'active',
+          'trip': {'driverName': 'x'},
+        }).trip,
+        isNull,
+      );
     });
+  });
+
+  group('how it was raised', () {
+    test('an alert that does not say is critical', () {
+      // Every alert from an older app version, and anything unrecognised:
+      // none may be taken as the less urgent kind.
+      expect(alert({'status': 'active'}).severity, SosSeverity.critical);
+      expect(
+        alert({'status': 'active', 'severity': 'bogus'}).severity,
+        SosSeverity.critical,
+      );
+      expect(alert({'status': 'active'}).silent, isFalse);
+    });
+
+    test('a help request carries what happened', () {
+      final a = alert({
+        'status': 'active',
+        'severity': 'incident',
+        'category': 'medical',
+      });
+      expect(a.severity, SosSeverity.incident);
+      expect(a.category, SosCategory.medical);
+      expect(sosStatusMessage(a).title, 'Help request sent');
+    });
+
+    test('an unknown category is dropped, not guessed', () {
+      expect(alert({'status': 'active', 'category': 'fire'}).category, isNull);
+    });
+
+    test('only a real true makes an alert silent', () {
+      expect(alert({'status': 'active', 'silent': 'yes'}).silent, isFalse);
+      expect(alert({'status': 'active', 'silent': true}).silent, isTrue);
+    });
+  });
+
+  group('a silent alert', () {
+    test('says admins will not call, without alarming words', () {
+      final m = sosStatusMessage(alert({'status': 'active', 'silent': true}));
+      expect(m.detail, contains("won't call"));
+      expect('${m.title} ${m.detail}', isNot(contains('SOS')));
+      expect('${m.title} ${m.detail}', isNot(contains('danger')));
+    });
+
+    test('says who has seen it, and still that they will not call', () {
+      final m = sosStatusMessage(
+        alert({
+          'status': 'acknowledged',
+          'silent': true,
+          'acknowledgedBy': 'Admin Reyes',
+        }),
+      );
+      expect(m.detail, contains('Admin Reyes'));
+      expect(m.detail, contains("won't call"));
+    });
+  });
+
+  group('an escalated alert', () {
+    test('says emergency services are being contacted, and by whom', () {
+      final m = sosStatusMessage(
+        alert({
+          'status': 'acknowledged',
+          'acknowledgedBy': 'Admin Reyes',
+          'escalatedBy': 'Admin Reyes',
+        }),
+      );
+      expect(m.title, contains('Emergency services'));
+      expect(m.detail, contains('Admin Reyes'));
+    });
+
+    test('never promises that anyone is on the way', () {
+      final m = sosStatusMessage(
+        alert({'status': 'acknowledged', 'escalatedBy': 'Admin Reyes'}),
+      );
+      expect(
+        '${m.title} ${m.detail}'.toLowerCase(),
+        isNot(contains('on the way')),
+      );
+      expect('${m.title} ${m.detail}'.toLowerCase(), isNot(contains('coming')));
+    });
+  });
+
+  test('the trip keeps both phones and its stage', () {
+    final trip = alert({
+      'status': 'active',
+      'trip': {
+        'bookingId': 'b1',
+        'driverId': 'd1',
+        'driverPhone': '0917 000 0001',
+        'passengerId': 'p1',
+        'passengerPhone': '0917 000 0002',
+        'tripStatus': 'TRIP_IN_PROGRESS',
+      },
+    }).trip!;
+    expect(trip.passengerPhone, '0917 000 0002');
+    expect(trip.driverPhone, '0917 000 0001');
+    expect(trip.tripStatus, 'TRIP_IN_PROGRESS');
+    expect(SosTrip.fromMap(trip.toMap())!.passengerId, 'p1');
   });
 
   test('a last known position older than ten minutes is not sent', () {

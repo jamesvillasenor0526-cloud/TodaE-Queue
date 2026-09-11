@@ -57,16 +57,16 @@ class SosService {
     if (uid == null) return Stream.value(null);
     // Equality on one field, sorted here, so no composite index is needed.
     return _alerts.where('userId', isEqualTo: uid).snapshots().map((snap) {
-      final open = [
-        for (final d in snap.docs)
-          SosAlert.fromMap(d.id, d.data(), toDate: _toDate),
-      ].where((a) => a.status.isOpen).toList()
-        ..sort((a, b) {
-          final x = a.triggeredAt, y = b.triggeredAt;
-          if (x == null) return -1; // just written, not yet timestamped
-          if (y == null) return 1;
-          return y.compareTo(x);
-        });
+      final open =
+          [
+            for (final d in snap.docs)
+              SosAlert.fromMap(d.id, d.data(), toDate: _toDate),
+          ].where((a) => a.status.isOpen).toList()..sort((a, b) {
+            final x = a.triggeredAt, y = b.triggeredAt;
+            if (x == null) return -1; // just written, not yet timestamped
+            if (y == null) return 1;
+            return y.compareTo(x);
+          });
       return open.isEmpty ? null : open.first;
     });
   }
@@ -94,7 +94,11 @@ class SosService {
   /// [delivered] is false when the server could not be reached in time: the
   /// alert is saved on the phone and will send itself when signal returns,
   /// and the screen says so rather than pretending it went.
-  Future<({String id, bool delivered})> trigger() async {
+  Future<({String id, bool delivered})> trigger({
+    SosSeverity severity = SosSeverity.critical,
+    SosCategory? category,
+    bool silent = false,
+  }) async {
     final user = _auth.currentUser;
     if (user == null) throw SosException('Please sign in to send an SOS.');
 
@@ -108,6 +112,9 @@ class SosService {
       'userRole': profile.role,
       'userPhone': profile.phone,
       'status': SosStatus.active.wire,
+      'severity': severity.wire,
+      'category': category?.wire,
+      'silent': silent,
       'triggeredAt': FieldValue.serverTimestamp(),
       'resolvedAt': null,
       // Old dashboards read these two directly, so they are always present.
@@ -189,18 +196,19 @@ class SosService {
   Future<void> _startTracking(String alertId) async {
     if (!await _locationAllowed()) return;
     if (_trackingId != alertId) return;
-    _tracking = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 15,
-      ),
-    ).listen((p) {
-      final now = DateTime.now();
-      if (_lastWrite != null && now.difference(_lastWrite!) < _trackEvery) {
-        return;
-      }
-      _writeLocation(alertId, p);
-    }, onError: (Object e) => debugPrint('SOS: tracking error: $e'));
+    _tracking =
+        Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 15,
+          ),
+        ).listen((p) {
+          final now = DateTime.now();
+          if (_lastWrite != null && now.difference(_lastWrite!) < _trackEvery) {
+            return;
+          }
+          _writeLocation(alertId, p);
+        }, onError: (Object e) => debugPrint('SOS: tracking error: $e'));
     _heartbeat = Timer.periodic(_heartbeatEvery, (_) async {
       final last = _lastWrite;
       if (last != null &&
@@ -282,13 +290,14 @@ class SosService {
 
   // ---- Helpers -------------------------------------------------------------
 
-  Map<String, dynamic> _locationFields(Position p, SosLocationSource source) => {
-    'latitude': p.latitude,
-    'longitude': p.longitude,
-    'locationAccuracy': p.accuracy,
-    'locationAt': Timestamp.fromDate(p.timestamp),
-    'locationSource': source.wire,
-  };
+  Map<String, dynamic> _locationFields(Position p, SosLocationSource source) =>
+      {
+        'latitude': p.latitude,
+        'longitude': p.longitude,
+        'locationAccuracy': p.accuracy,
+        'locationAt': Timestamp.fromDate(p.timestamp),
+        'locationSource': source.wire,
+      };
 
   Future<bool> _locationAllowed() async {
     try {
@@ -374,30 +383,40 @@ class SosService {
     });
     final booking = active.first;
     final data = booking.data();
+    final state = TripState.fromMap(booking.id, data);
 
-    String? plate, body;
-    final driverId = data['driverId'] as String?;
-    if (driverId != null && driverId.isNotEmpty) {
-      try {
-        final driver = await _firestore
-            .collection('users')
-            .doc(driverId)
-            .get()
-            .timeout(const Duration(seconds: 3));
-        plate = driver.data()?['plateNumber'] as String?;
-        body = driver.data()?['bodyNumber'] as String?;
-      } catch (_) {
-        // The booking alone still says who the driver is.
-      }
-    }
+    // Both people's phones, so an admin can reach whichever is safe to call.
+    // Bookings carry the driver's number only sometimes (26 of 63) and the
+    // passenger's never, so both come from the profiles.
+    final driver = await _userData(state.driverId);
+    final passenger = await _userData(state.passengerId);
 
     return SosTrip(
       bookingId: booking.id,
+      driverId: state.driverId,
       driverName: data['driverName'] as String?,
-      driverPhone: data['driverPhone'] as String?,
-      plateNumber: plate,
-      bodyNumber: body,
+      driverPhone:
+          (data['driverPhone'] as String?) ?? driver?['phone'] as String?,
+      plateNumber: driver?['plateNumber'] as String?,
+      bodyNumber: driver?['bodyNumber'] as String?,
+      passengerId: state.passengerId,
       passengerName: data['passengerName'] as String?,
+      passengerPhone: passenger?['phone'] as String?,
+      tripStatus: state.trip.wire,
     );
+  }
+
+  Future<Map<String, dynamic>?> _userData(String? uid) async {
+    if (uid == null || uid.isEmpty) return null;
+    try {
+      final doc = await _firestore
+          .collection('users')
+          .doc(uid)
+          .get()
+          .timeout(const Duration(seconds: 3));
+      return doc.data();
+    } catch (_) {
+      return null; // the booking alone still says who they are
+    }
   }
 }

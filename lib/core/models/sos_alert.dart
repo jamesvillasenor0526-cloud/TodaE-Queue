@@ -44,6 +44,46 @@ enum SosStatus {
   bool get isOpen => this == active || this == acknowledged;
 }
 
+/// How the person raised the alert.
+enum SosSeverity {
+  /// "I need help now and can't explain." Also what every alert from an
+  /// older app version is: none of them said, and none may be taken lightly.
+  critical('critical'),
+
+  /// "I have time to say what happened" — comes with a [SosCategory]. Still
+  /// sounds the alarm: the category changes the label, not whether admins
+  /// hear it, or a frightened person who picks the calmer option would get a
+  /// slower answer.
+  incident('incident');
+
+  const SosSeverity(this.wire);
+  final String wire;
+
+  static SosSeverity fromWire(String? s) =>
+      s == incident.wire ? incident : critical;
+}
+
+/// What happened, chosen with one tap — never typed.
+enum SosCategory {
+  accident('accident', 'Accident'),
+  medical('medical', 'Medical emergency'),
+  threat('threat', 'Robbery or threat'),
+  harassment('harassment', 'Harassment'),
+  breakdown('breakdown', 'Vehicle breakdown'),
+  other('other', 'Something else');
+
+  const SosCategory(this.wire, this.label);
+  final String wire;
+  final String label;
+
+  static SosCategory? fromWire(String? s) {
+    for (final v in values) {
+      if (v.wire == s) return v;
+    }
+    return null;
+  }
+}
+
 /// Where a location came from, for judging how far to trust it.
 enum SosLocationSource {
   /// A fresh reading taken for this alert.
@@ -70,28 +110,44 @@ enum SosLocationSource {
 /// which driver. The old alert carried only a name and a role.
 class SosTrip {
   final String bookingId;
+  final String? driverId;
   final String? driverName;
   final String? driverPhone;
   final String? plateNumber;
   final String? bodyNumber;
+  final String? passengerId;
   final String? passengerName;
+  final String? passengerPhone;
+
+  /// The trip's stage when the alert went up — [TripStatus.wire], e.g.
+  /// `TRIP_IN_PROGRESS`. Whether the passenger was already on board changes
+  /// what responders should expect to find.
+  final String? tripStatus;
 
   const SosTrip({
     required this.bookingId,
+    this.driverId,
     this.driverName,
     this.driverPhone,
     this.plateNumber,
     this.bodyNumber,
+    this.passengerId,
     this.passengerName,
+    this.passengerPhone,
+    this.tripStatus,
   });
 
   Map<String, dynamic> toMap() => {
     'bookingId': bookingId,
+    'driverId': driverId,
     'driverName': driverName,
     'driverPhone': driverPhone,
     'plateNumber': plateNumber,
     'bodyNumber': bodyNumber,
+    'passengerId': passengerId,
     'passengerName': passengerName,
+    'passengerPhone': passengerPhone,
+    'tripStatus': tripStatus,
   };
 
   static SosTrip? fromMap(Object? raw) {
@@ -105,11 +161,15 @@ class SosTrip {
 
     return SosTrip(
       bookingId: id,
+      driverId: s('driverId'),
       driverName: s('driverName'),
       driverPhone: s('driverPhone'),
       plateNumber: s('plateNumber'),
       bodyNumber: s('bodyNumber'),
+      passengerId: s('passengerId'),
       passengerName: s('passengerName'),
+      passengerPhone: s('passengerPhone'),
+      tripStatus: s('tripStatus'),
     );
   }
 
@@ -128,6 +188,13 @@ class SosAlert {
   final String userRole;
   final String? userPhone;
   final SosStatus status;
+  final SosSeverity severity;
+  final SosCategory? category;
+
+  /// Sent by holding the SOS button, for someone who cannot be seen asking
+  /// for help. Nothing on their phone may give it away, and admins are told
+  /// not to call them.
+  final bool silent;
   final double? latitude;
   final double? longitude;
   final double? locationAccuracy;
@@ -138,6 +205,10 @@ class SosAlert {
   final String? acknowledgedBy;
   final DateTime? resolvedAt;
   final DateTime? cancelledAt;
+
+  /// Set by an admin who has decided to bring in emergency services.
+  final DateTime? escalatedAt;
+  final String? escalatedBy;
   final SosTrip? trip;
 
   const SosAlert({
@@ -146,6 +217,9 @@ class SosAlert {
     required this.userName,
     required this.userRole,
     required this.status,
+    this.severity = SosSeverity.critical,
+    this.category,
+    this.silent = false,
     this.userPhone,
     this.latitude,
     this.longitude,
@@ -157,6 +231,8 @@ class SosAlert {
     this.acknowledgedBy,
     this.resolvedAt,
     this.cancelledAt,
+    this.escalatedAt,
+    this.escalatedBy,
     this.trip,
   });
 
@@ -180,16 +256,23 @@ class SosAlert {
       userRole: s('userRole') ?? 'passenger',
       userPhone: s('userPhone'),
       status: SosStatus.fromWire(data['status'] as String?),
+      severity: SosSeverity.fromWire(data['severity'] as String?),
+      category: SosCategory.fromWire(data['category'] as String?),
+      silent: data['silent'] == true,
       latitude: d('latitude'),
       longitude: d('longitude'),
       locationAccuracy: d('locationAccuracy'),
       locationAt: toDate(data['locationAt']),
-      locationSource: SosLocationSource.fromWire(data['locationSource'] as String?),
+      locationSource: SosLocationSource.fromWire(
+        data['locationSource'] as String?,
+      ),
       triggeredAt: toDate(data['triggeredAt']),
       acknowledgedAt: toDate(data['acknowledgedAt']),
       acknowledgedBy: s('acknowledgedBy'),
       resolvedAt: toDate(data['resolvedAt']),
       cancelledAt: toDate(data['cancelledAt']),
+      escalatedAt: toDate(data['escalatedAt']),
+      escalatedBy: s('escalatedBy'),
       trip: SosTrip.fromMap(data['trip']),
     );
   }
@@ -198,28 +281,59 @@ class SosAlert {
 /// What the person who raised [alert] is told, in words that are true.
 ///
 /// Never "help is on the way" until someone has actually responded: before
-/// that, the honest answer is that the alert is waiting to be seen.
-({String title, String detail}) sosStatusMessage(SosAlert alert) =>
-    switch (alert.status) {
+/// that, the honest answer is that the alert is waiting to be seen. And
+/// never a claim that police or rescue are coming: an escalation means an
+/// admin is calling them, which is all that can be said.
+({String title, String detail}) sosStatusMessage(SosAlert alert) {
+  final who = alert.acknowledgedBy ?? alert.escalatedBy ?? 'A TODA admin';
+  if (alert.silent) {
+    // Short and plain: this may be read with someone looking on.
+    return switch (alert.status) {
       SosStatus.active => (
-        title: 'SOS alert sent',
+        title: 'Silent alert sent',
         detail:
-            'TODA admins have been alerted. Waiting for one to respond — '
-            'call 911 now if you are in danger.',
+            'Admins can see your location and trip. '
+            "They won't call you.",
       ),
       SosStatus.acknowledged => (
-        title: 'An admin has seen your alert',
-        detail: alert.acknowledgedBy == null
-            ? 'A TODA admin is responding. Stay where it is safe.'
-            : '${alert.acknowledgedBy} is responding. Stay where it is safe.',
+        title: 'An admin has seen it',
+        detail: alert.escalatedBy != null
+            ? '$who is contacting emergency services.'
+            : "$who is responding and won't call you.",
       ),
-      SosStatus.resolved => (
-        title: 'Alert resolved',
-        detail: 'A TODA admin has closed this alert.',
-      ),
+      _ => _closedMessage(alert.status),
+    };
+  }
+  return switch (alert.status) {
+    SosStatus.active => (
+      title: alert.severity == SosSeverity.incident
+          ? 'Help request sent'
+          : 'SOS alert sent',
+      detail:
+          'TODA admins have been alerted. Waiting for one to respond — '
+          'call 911 now if you are in danger.',
+    ),
+    SosStatus.acknowledged when alert.escalatedBy != null => (
+      title: 'Emergency services are being contacted',
+      detail: '$who is contacting them for you. Stay where it is safe.',
+    ),
+    SosStatus.acknowledged => (
+      title: 'An admin has seen your alert',
+      detail: '$who is responding. Stay where it is safe.',
+    ),
+    _ => _closedMessage(alert.status),
+  };
+}
+
+({String title, String detail}) _closedMessage(SosStatus status) =>
+    switch (status) {
       SosStatus.cancelled => (
         title: 'Alert cancelled',
         detail: 'You told us you are safe.',
+      ),
+      _ => (
+        title: 'Alert resolved',
+        detail: 'A TODA admin has closed this alert.',
       ),
     };
 

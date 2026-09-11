@@ -114,8 +114,9 @@ service cloud.firestore {
       // The owner may update their own alert — its location while it is open,
       // the trip attached a moment after raising it — and call it off. Older
       // app versions call it off by writing 'resolved', so that stays allowed.
-      // They may not claim an admin has responded, nor hand the alert to
-      // someone else. Admins may update any alert.
+      // They may not claim an admin has responded or brought in emergency
+      // services, nor hand the alert to someone else. Admins may update any
+      // alert.
       allow update: if (signedIn()
           && resource.data.userId == request.auth.uid
           && request.resource.data.userId == request.auth.uid
@@ -124,7 +125,9 @@ service cloud.firestore {
           && request.resource.data.get('acknowledgedBy', null)
                == resource.data.get('acknowledgedBy', null)
           && request.resource.data.get('resolvedBy', null)
-               == resource.data.get('resolvedBy', null))
+               == resource.data.get('resolvedBy', null)
+          && request.resource.data.get('escalatedBy', null)
+               == resource.data.get('escalatedBy', null))
         || isAdmin();
 
       // A record of who asked for help, and when, is never erased.

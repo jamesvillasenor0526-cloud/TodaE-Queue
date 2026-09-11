@@ -28,6 +28,7 @@ import '../../../core/models/road_report.dart';
 import '../../shared/reports/report_map_layer.dart';
 import '../../shared/reports/report_sheet.dart';
 import '../navigation/navigation_panel.dart';
+import '../../shared/navigation/gliding_marker_layer.dart';
 import '../../shared/navigation/trip_route_layer.dart';
 import '../../shared/reports/my_reports_screen.dart';
 import '../../shared/sos/sos_button.dart';
@@ -1703,16 +1704,6 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
                     MarkerLayer(
                       markers: [
                         Marker(
-                          point: driverPoint,
-                          width: 40,
-                          height: 40,
-                          child: const Icon(
-                            Icons.electric_rickshaw,
-                            color: AppTheme.primaryBlue,
-                            size: 30,
-                          ),
-                        ),
-                        Marker(
                           point: pickupPoint,
                           width: showDestination ? 30 : 45,
                           height: showDestination ? 30 : 45,
@@ -1738,6 +1729,16 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
                             ),
                           ),
                       ],
+                    ),
+                    // Glides between the positions the phone sends, rather
+                    // than hopping every couple of seconds.
+                    GlidingMarkerLayer(
+                      target: driverPoint,
+                      child: const Icon(
+                        Icons.electric_rickshaw,
+                        color: AppTheme.primaryBlue,
+                        size: 30,
+                      ),
                     ),
                   ],
                 ),
@@ -2014,17 +2015,6 @@ class _DriverMapTabState extends State<_DriverMapTab> {
           );
         }
 
-        if (_myPosition != null) {
-          markers.add(
-            Marker(
-              point: _myPosition!,
-              width: 40,
-              height: 40,
-              child: const _SelfLocationDot(),
-            ),
-          );
-        }
-
         return Stack(
           children: [
             FlutterMap(
@@ -2052,6 +2042,11 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                   },
                 ),
                 MarkerLayer(markers: markers),
+                // "You", gliding between GPS readings rather than jumping.
+                GlidingMarkerLayer(
+                  target: _myPosition,
+                  child: const _SelfLocationDot(),
+                ),
                 const AppMapAttribution(),
               ],
             ),

@@ -24,6 +24,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../../config/theme.dart';
+import '../../../core/models/glide.dart';
 import '../../../core/models/live_route.dart';
 import '../../../core/models/navigation_state.dart';
 import '../../../core/models/trip_state.dart';
@@ -40,9 +41,9 @@ const double _followZoom = 17;
 /// the road ahead is visible than behind, as every navigation app does.
 const double _driverScreenOffset = 0.22;
 
-/// How long the arrow takes to glide to a new reading. About the GPS
-/// interval, so it arrives as the next reading does rather than jumping.
-const Duration _glide = Duration(milliseconds: 950);
+/// How long the arrow takes to swing round to a new heading when only the
+/// heading has changed — after a re-route, say — and it is not moving.
+const Duration _turn = Duration(milliseconds: 500);
 
 const Color _routeBlue = Color(0xFF1A73E8);
 const Color _altBlue = Color(0xFF8AB4F8);
@@ -77,6 +78,7 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
   // The arrow glides between readings rather than jumping.
   LatLng? _fromPos, _toPos, _shownPos;
   double _fromHeading = 0, _toHeading = 0, _shownHeading = 0;
+  DateTime? _lastReading;
 
   // Label positions, worked out once per set of routes.
   String? _anchorsFor;
@@ -85,7 +87,7 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
   @override
   void initState() {
     super.initState();
-    _anim = AnimationController(vsync: this, duration: _glide)
+    _anim = AnimationController(vsync: this, duration: _turn)
       ..addListener(_onFrame);
     _nav.holdExisting();
     _nav.addListener(_onNav);
@@ -130,15 +132,46 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
     // Drawn on the road when close to it, as every navigation app does.
     final p = _nav.shownPosition;
     if (p != null && p != _toPos) {
-      _fromPos = _shownPos ?? p;
+      // Over about the time since the last reading, at a steady pace, so
+      // the arrow is still moving when the next one arrives. It used to take
+      // a fixed 0.95 s, slowing to a stop each time: the arrow pulsed once a
+      // second, and paused outright whenever a reading came late.
+      final now = DateTime.now();
+      final from = _shownPos ?? p;
+      final duration = glideDuration(
+        from: from,
+        to: p,
+        sinceLastReading: _lastReading == null
+            ? Duration.zero
+            : now.difference(_lastReading!),
+      );
+      _lastReading = now;
+      _fromPos = from;
       _toPos = p;
       _fromHeading = _shownHeading;
       _toHeading = _nav.heading;
-      _anim.forward(from: 0);
+      if (duration == Duration.zero) {
+        // GPS back after a gap: jump, rather than drive through buildings.
+        _anim.stop();
+        _shownPos = p;
+        _shownHeading = _toHeading;
+        _followCamera();
+      } else {
+        _anim
+          ..duration = duration
+          ..forward(from: 0);
+      }
     } else if (_nav.heading != _toHeading) {
+      // Only the heading changed — a re-route, mid-glide. Carry on from
+      // where the arrow is. Restarting from the previous reading, as this
+      // used to, sent the arrow jumping back to it before gliding again.
+      final left = (_anim.duration ?? _turn) * (1 - _anim.value);
+      _fromPos = _shownPos ?? _fromPos;
       _fromHeading = _shownHeading;
       _toHeading = _nav.heading;
-      _anim.forward(from: 0);
+      _anim
+        ..duration = left > _turn ? left : _turn
+        ..forward(from: 0);
     }
     if (mounted) setState(() {});
   }
@@ -146,13 +179,11 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
   void _onFrame() {
     final from = _fromPos, to = _toPos;
     if (from == null || to == null) return;
-    final t = Curves.easeOut.transform(_anim.value);
-    _shownPos = LatLng(
-      from.latitude + (to.latitude - from.latitude) * t,
-      from.longitude + (to.longitude - from.longitude) * t,
-    );
+    // Position at a steady pace, like a vehicle; heading eased, like a turn.
+    _shownPos = lerpLatLng(from, to, _anim.value);
+    final turn = Curves.easeOut.transform(_anim.value);
     _shownHeading =
-        (_fromHeading + shortestTurn(_fromHeading, _toHeading) * t) % 360;
+        (_fromHeading + shortestTurn(_fromHeading, _toHeading) * turn) % 360;
     _followCamera();
     if (mounted) setState(() {});
   }
@@ -178,8 +209,7 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
 
   void _showOverview() {
     final lines = [
-      for (final s in _nav.choices?.all ?? [?_nav.route])
-        ...s.route.points,
+      for (final s in _nav.choices?.all ?? [?_nav.route]) ...s.route.points,
       // Including the blocked way, so the driver can see why it is not taken.
       ...?_nav.choices?.blocked?.route.points,
       ?_shownPos,
@@ -252,7 +282,8 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
       // On the stretch the blocked way does not share with the route being
       // driven — which is where the blockage is.
       final spot = blocked.blockers.firstOrNull?.location;
-      _blockedLabel = spot ?? labelAnchor(blocked.route.points, active.route.points);
+      _blockedLabel =
+          spot ?? labelAnchor(blocked.route.points, active.route.points);
     }
     return (score: blocked, line: line, label: _blockedLabel);
   }
@@ -264,8 +295,10 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
     RouteScore active,
     List<({RouteScore score, List<LatLng> line})> others,
   ) {
-    final key = [active.route.key, ...others.map((o) => o.score.route.key)]
-        .join('|');
+    final key = [
+      active.route.key,
+      ...others.map((o) => o.score.route.key),
+    ].join('|');
     if (key != _anchorsFor) {
       _anchorsFor = key;
       _anchors = {
@@ -750,7 +783,10 @@ class _Figure extends StatelessWidget {
             fontWeight: FontWeight.bold,
           ),
         ),
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 15)),
+        Text(
+          label,
+          style: const TextStyle(color: Colors.white70, fontSize: 15),
+        ),
       ],
     ),
   );

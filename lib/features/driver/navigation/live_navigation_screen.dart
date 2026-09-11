@@ -123,7 +123,7 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
           if (!_nav.phase.isNavigating && mounted) {
             Navigator.of(context).maybePop();
           }
-        });
+        }, onError: (Object e) => debugPrint('Trip listener stopped: $e'));
   }
 
   // ---- Motion ------------------------------------------------------------

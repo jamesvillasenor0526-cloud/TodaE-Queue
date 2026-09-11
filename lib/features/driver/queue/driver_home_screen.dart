@@ -97,8 +97,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               });
             }
           }
-        });
+        }, onError: _listenerError);
   }
+
+  /// A live query that fails — most often permission-denied in the moment
+  /// between signing out and this screen closing — must not surface as an
+  /// unhandled exception; the next sign-in opens fresh listeners.
+  static void _listenerError(Object e) =>
+      debugPrint('Driver home listener stopped: $e');
 
   Future<void> _startLocationWatch() async {
     final started = await _geofence.startTracking();

@@ -59,19 +59,29 @@ class SosService {
     final uid = _auth.currentUser?.uid;
     if (uid == null) return Stream.value(null);
     // Equality on one field, sorted here, so no composite index is needed.
-    return _alerts.where('userId', isEqualTo: uid).snapshots().map((snap) {
-      final open =
-          [
-            for (final d in snap.docs)
-              SosAlert.fromMap(d.id, d.data(), toDate: _toDate),
-          ].where((a) => a.status.isOpen).toList()..sort((a, b) {
-            final x = a.triggeredAt, y = b.triggeredAt;
-            if (x == null) return -1; // just written, not yet timestamped
-            if (y == null) return 1;
-            return y.compareTo(x);
-          });
-      return open.isEmpty ? null : open.first;
-    });
+    return _alerts
+        .where('userId', isEqualTo: uid)
+        .snapshots()
+        .handleError(
+          // Signing out cuts every live query off with permission-denied while
+          // the home screen and its SOS button are still closing. Not an error
+          // worth an unhandled exception; the next sign-in listens afresh.
+          (Object e) => debugPrint('SOS alert listener stopped: $e'),
+          test: (e) => e is FirebaseException && e.code == 'permission-denied',
+        )
+        .map((snap) {
+          final open =
+              [
+                for (final d in snap.docs)
+                  SosAlert.fromMap(d.id, d.data(), toDate: _toDate),
+              ].where((a) => a.status.isOpen).toList()..sort((a, b) {
+                final x = a.triggeredAt, y = b.triggeredAt;
+                if (x == null) return -1; // just written, not yet timestamped
+                if (y == null) return 1;
+                return y.compareTo(x);
+              });
+          return open.isEmpty ? null : open.first;
+        });
   }
 
   /// [alertId] as the server has it now, bypassing the local cache.

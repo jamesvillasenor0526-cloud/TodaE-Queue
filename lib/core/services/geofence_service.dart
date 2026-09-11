@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
@@ -59,11 +60,22 @@ class GeofenceService {
     final granted = await ensurePermission();
     if (!granted) return false;
 
+    // Every ~3 m, at most every 2 s. On Android the interval has to be
+    // asked for, or the system delivers a reading only every 5 s — too
+    // coarse for the passenger's and the dashboard's live maps, which this
+    // stream feeds (through the driver home screen's location writes).
+    final settings = defaultTargetPlatform == TargetPlatform.android
+        ? AndroidSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 3,
+            intervalDuration: const Duration(seconds: 2),
+          )
+        : const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 3, // re-check after moving ~3 meters
+          );
     _rawSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 3, // re-check after moving ~3 meters
-      ),
+      locationSettings: settings,
     ).listen((pos) => _positionController.add(pos));
 
     _isTracking = true;

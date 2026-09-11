@@ -11,6 +11,8 @@
 /// alert now reports exactly how far it has got.
 library;
 
+import 'package:latlong2/latlong.dart';
+
 /// Where an alert stands.
 ///
 /// `active` and `resolved` are what older versions of the app write, and
@@ -336,6 +338,20 @@ class SosAlert {
         detail: 'A TODA admin has closed this alert.',
       ),
     };
+
+/// The path an open alert records: a point each time the person has moved
+/// this far. Close enough to show which road and which way; far enough that
+/// a phone lying still adds nothing.
+const double kSosPathStepMeters = 10;
+
+/// Points recorded per alert at most — about 20 km at one per 10 m, far
+/// beyond any tricycle SOS, and well inside a database record's size limit.
+const int kSosPathMaxPoints = 2000;
+
+/// Whether moving to [next] adds a point to the path after [last].
+bool extendsSosPath(LatLng? last, LatLng next) =>
+    last == null ||
+    const Distance().as(LengthUnit.Meter, last, next) >= kSosPathStepMeters;
 
 /// A last known position older than this is not sent as the location.
 ///

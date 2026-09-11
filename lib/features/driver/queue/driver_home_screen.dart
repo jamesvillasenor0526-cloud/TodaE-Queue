@@ -47,6 +47,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   StreamSubscription<Position>? _positionSub;
   StreamSubscription<QuerySnapshot>? _activeBookingSub;
   bool _isCheckingLocation = false;
+
+  /// Location writes are at most this frequent; see _onPositionUpdate.
+  static const Duration _locationPushEvery = Duration(seconds: 2);
+  DateTime? _lastLocationPush;
+  Position? _heldPosition;
+  Position? _lastPosition;
+  Timer? _pushTimer;
+  Timer? _heartbeat;
+  static const Duration _tripHeartbeatEvery = Duration(seconds: 20);
   bool _locationPermissionDenied = false;
   String? _lastPromptedTerminalId;
   bool _hasActiveEntry = false;
@@ -63,6 +72,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   void dispose() {
     _activeBookingSub?.cancel();
     _positionSub?.cancel();
+    _pushTimer?.cancel();
+    _heartbeat?.cancel();
     _geofence.stopTracking();
     super.dispose();
   }
@@ -95,6 +106,83 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       return;
     }
     _positionSub = _geofence.positionStream.listen(_onPositionUpdate);
+    _heartbeat?.cancel();
+    _heartbeat = Timer.periodic(_tripHeartbeatEvery, (_) => _tripHeartbeat());
+  }
+
+  /// Sends the driver's position for the maps others watch.
+  ///
+  /// The stream reports every 3 m, which while driving can be several times
+  /// a second. Maps glide between readings, so one every couple of seconds
+  /// looks the same to anyone watching and costs a fraction of the writes.
+  /// A reading that arrives too soon is held, not dropped: the last one
+  /// before the tricycle stops is where it actually stopped, and the stream
+  /// sends nothing more until it moves again.
+  void _pushLocation(Position position) {
+    _lastPosition = position;
+    _heldPosition = position;
+    if (_pushTimer?.isActive ?? false) return; // the held one goes shortly
+    final last = _lastLocationPush;
+    final wait = last == null
+        ? Duration.zero
+        : _locationPushEvery - DateTime.now().difference(last);
+    _pushTimer = Timer(wait.isNegative ? Duration.zero : wait, () {
+      final p = _heldPosition;
+      _heldPosition = null;
+      if (p == null || !mounted) return;
+      _lastLocationPush = DateTime.now();
+      _writeLocation(p);
+    });
+  }
+
+  /// During a trip, re-sends the position while the tricycle is standing
+  /// still — waiting at the pickup, stopped in traffic. The stream reports
+  /// only movement, so otherwise the passenger's "updated N s ago" would
+  /// climb and they would be told the phone may have lost signal while the
+  /// driver sat outside their door. Only during a trip: every driver in a
+  /// queue doing this would cost thousands of writes a day for nothing.
+  void _tripHeartbeat() {
+    final p = _lastPosition;
+    final last = _lastLocationPush;
+    if (_activeBookingId == null || p == null || !mounted) return;
+    // A little under the period, so a send just before the tick does not
+    // push the next one a whole period later.
+    if (last != null &&
+        DateTime.now().difference(last) <
+            _tripHeartbeatEvery - const Duration(seconds: 5)) {
+      return; // moving, so already sending
+    }
+    _lastLocationPush = DateTime.now();
+    _writeLocation(p);
+  }
+
+  Future<void> _writeLocation(Position position) async {
+    try {
+      // Update driver's live location in users collection
+      await FirebaseFirestore.instance.collection('users').doc(uid).update({
+        'lastLatitude': position.latitude,
+        'lastLongitude': position.longitude,
+        'lastLocationAt': FieldValue.serverTimestamp(),
+        'isOnline': true,
+      });
+
+      // Update driver location in active booking if dispatched
+      if (_activeBookingId != null) {
+        await FirebaseFirestore.instance
+            .collection('bookings')
+            .doc(_activeBookingId)
+            .set({
+              'driverLatitude': position.latitude,
+              'driverLongitude': position.longitude,
+              // So the passenger can tell a live position from one a
+              // phone stopped sending minutes ago.
+              'driverLocationAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+      }
+    } catch (e) {
+      // The next reading carries the same information.
+      debugPrint('Could not send driver location: $e');
+    }
   }
 
   Future<void> _onPositionUpdate(Position position) async {
@@ -103,27 +191,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       '📍 _hasActiveEntry=$_hasActiveEntry, _activeBookingId=$_activeBookingId',
     );
 
-    // Update driver's live location in users collection
-    await FirebaseFirestore.instance.collection('users').doc(uid).update({
-      'lastLatitude': position.latitude,
-      'lastLongitude': position.longitude,
-      'lastLocationAt': FieldValue.serverTimestamp(),
-      'isOnline': true,
-    });
-
-    // Update driver location in active booking if dispatched
-    if (_activeBookingId != null) {
-      debugPrint('✅ Updating booking $_activeBookingId with driver location');
-      await FirebaseFirestore.instance
-          .collection('bookings')
-          .doc(_activeBookingId)
-          .set({
-            'driverLatitude': position.latitude,
-            'driverLongitude': position.longitude,
-          }, SetOptions(merge: true)); // ← Use set with merge
-    } else {
-      debugPrint('⚠️ No active booking ID — location NOT sent to bookings');
-    }
+    _pushLocation(position);
 
     if (_hasActiveEntry || _isCheckingLocation || !mounted) return;
 
@@ -880,7 +948,10 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: const TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+        ),
         Text(
           value,
           style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
@@ -996,7 +1067,10 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
                           const SizedBox(height: 4),
                           const Text(
                             'Accept the booking to see pickup location.',
-                            style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                            style: TextStyle(
+                              color: AppTheme.textMuted,
+                              fontSize: 12,
+                            ),
                           ),
                           const SizedBox(height: 16),
                           SizedBox(
@@ -1060,8 +1134,10 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
                               // The authoritative payment state, not the
                               // legacy mirror it can drift from.
                               final paymentStatus =
-                                  TripState.fromMap('', bookingData ?? const {})
-                                          .payment ==
+                                  TripState.fromMap(
+                                        '',
+                                        bookingData ?? const {},
+                                      ).payment ==
                                       PaymentState.paymentConfirmed
                                   ? 'paid'
                                   : 'pending';
@@ -1448,7 +1524,10 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
                 if (status == 'waiting')
                   OutlinedButton.icon(
                     onPressed: () => _confirmLeave(context, data),
-                    icon: const Icon(Icons.exit_to_app, color: AppTheme.errorRed),
+                    icon: const Icon(
+                      Icons.exit_to_app,
+                      color: AppTheme.errorRed,
+                    ),
                     label: const Text(
                       'Leave Queue',
                       style: TextStyle(color: AppTheme.errorRed),
@@ -1480,7 +1559,10 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
               Navigator.pop(ctx);
               widget.onLeaveQueue();
             },
-            child: const Text('Leave', style: TextStyle(color: AppTheme.errorRed)),
+            child: const Text(
+              'Leave',
+              style: TextStyle(color: AppTheme.errorRed),
+            ),
           ),
         ],
       ),
@@ -1579,8 +1661,10 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
         // the already-visited pickup stays big and orange makes the route
         // look like it stops short of anywhere.
         final navPhase = NavigationPhase.forTrip(
-          TripState.fromMap(widget.bookingId ?? '', bookingData ?? const {})
-              .trip,
+          TripState.fromMap(
+            widget.bookingId ?? '',
+            bookingData ?? const {},
+          ).trip,
         );
         final showDestination =
             widget.highlightDestination ||
@@ -1595,8 +1679,7 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
                 child: FlutterMap(
                   mapController: _mapController,
                   options: MapOptions(
-                    initialCenter:
-                        showDestination && destinationPoint != null
+                    initialCenter: showDestination && destinationPoint != null
                         ? destinationPoint
                         : driverPoint,
                     initialZoom: widget.highlightDestination ? 14 : 15,
@@ -1613,9 +1696,7 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
                         bookingId: widget.bookingId!,
                         controller: _mapController,
                         from: driverPoint,
-                        to:
-                            showDestination &&
-                                destinationPoint != null
+                        to: showDestination && destinationPoint != null
                             ? destinationPoint
                             : pickupPoint,
                       ),
@@ -1686,7 +1767,6 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
 }
 
 // ─── Routing Polyline ─────────────────────────────────────────────────────────
-
 
 // ─── Driver Map Tab ───────────────────────────────────────────────────────────
 
@@ -1874,14 +1954,19 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                               final count = qSnap.data?.docs.length ?? 0;
                               return Text(
                                 '$count driver(s) currently waiting',
-                                style: const TextStyle(color: AppTheme.textMuted),
+                                style: const TextStyle(
+                                  color: AppTheme.textMuted,
+                                ),
                               );
                             },
                           ),
                           const SizedBox(height: 8),
                           const Text(
                             'Drive into the highlighted circle to check in automatically.',
-                            style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                            style: TextStyle(
+                              color: AppTheme.textMuted,
+                              fontSize: 12,
+                            ),
                           ),
                         ],
                       ),
@@ -2264,7 +2349,9 @@ class _DriverHistoryTabState extends State<_DriverHistoryTab> {
                   child: Text(
                     status,
                     style: TextStyle(
-                      color: isCancelled ? AppTheme.errorRed : AppTheme.textMuted,
+                      color: isCancelled
+                          ? AppTheme.errorRed
+                          : AppTheme.textMuted,
                       fontWeight: FontWeight.bold,
                       fontSize: 12,
                     ),
@@ -2319,8 +2406,7 @@ class _DriverHistoryTabState extends State<_DriverHistoryTab> {
                               final isPaid = paymentStatus == 'paid';
 
                               return Column(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.start,
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   if (fare != null) ...[
                                     const SizedBox(height: 8),
@@ -2334,7 +2420,11 @@ class _DriverHistoryTabState extends State<_DriverHistoryTab> {
                                       Icons.payment,
                                       'Status',
                                       isPaid
-                                          ? '✅ Paid${paymentMethod == 'gcash' ? ' (GCash)' : paymentMethod == 'cash' ? ' (Cash)' : ''}'
+                                          ? '✅ Paid${paymentMethod == 'gcash'
+                                                ? ' (GCash)'
+                                                : paymentMethod == 'cash'
+                                                ? ' (Cash)'
+                                                : ''}'
                                           : paymentMethod == 'cash'
                                           ? '⏳ Awaiting cash confirmation'
                                           : '⏳ Awaiting passenger payment',
@@ -3747,7 +3837,10 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
                 borderRadius: BorderRadius.circular(12),
               ),
               child: ListTile(
-                leading: const Icon(Icons.flag_outlined, color: AppTheme.warning),
+                leading: const Icon(
+                  Icons.flag_outlined,
+                  color: AppTheme.warning,
+                ),
                 title: const Text(
                   'My road reports',
                   style: TextStyle(fontWeight: FontWeight.bold),
@@ -3877,8 +3970,7 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
                     title: const Text('About App'),
                     subtitle: const Text('TODA E-QUEUE+ v1.0.0'),
                     trailing: const Icon(Icons.chevron_right),
-                    onTap: () =>
-                        Navigator.pushNamed(context, AppRoutes.about),
+                    onTap: () => Navigator.pushNamed(context, AppRoutes.about),
                   ),
                 ],
               ),
@@ -3894,7 +3986,10 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
               child: Column(
                 children: [
                   ListTile(
-                    leading: const Icon(Icons.bug_report, color: AppTheme.warning),
+                    leading: const Icon(
+                      Icons.bug_report,
+                      color: AppTheme.warning,
+                    ),
                     title: const Text('Send Ticket / Report Issue'),
                     trailing: const Icon(Icons.chevron_right, size: 18),
                     onTap: () =>
@@ -4035,10 +4130,7 @@ class _AcceptedTripHeading extends StatelessWidget {
             Text(
               subtitle,
               textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: AppTheme.textMuted,
-                fontSize: 12,
-              ),
+              style: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
             ),
             if (phase == NavigationPhase.atPickup) ...[
               const SizedBox(height: 4),
@@ -4129,10 +4221,7 @@ class _DestinationSwitch extends StatelessWidget {
               showingDestination
                   ? 'Show route to passenger'
                   : 'Show route to destination',
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
             ),
             style: OutlinedButton.styleFrom(
               foregroundColor: showingDestination

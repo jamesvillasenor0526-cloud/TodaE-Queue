@@ -11,9 +11,12 @@ import '../../../config/routes.dart';
 import '../booking/payment_screen.dart';
 import 'widgets/trip_status_card.dart';
 import 'widgets/driver_eta_card.dart';
+import '../../../core/models/glide.dart';
+import '../../../core/models/location_fix.dart';
 import '../../../core/models/trip_state.dart';
 import '../../../core/services/trip_service.dart';
 import '../../shared/reports/report_map_layer.dart';
+import '../../shared/navigation/gliding_marker_layer.dart';
 import '../../shared/navigation/trip_route_layer.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -41,17 +44,46 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
   LatLng? _passengerPosition;
   final MapController _mapController = MapController();
 
+  /// Redraws "updated N s ago", which ages even when no reading arrives.
+  Timer? _clock;
+
   @override
   void initState() {
     super.initState();
     _startPassengerLocationUpdates();
     _loadPassengerLastLocation();
+    _clock = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
     _positionStream?.cancel();
+    _clock?.cancel();
     super.dispose();
+  }
+
+  /// How fresh the driver's position is, in words — or null when the
+  /// driver's app does not say when it was taken.
+  ///
+  /// This used to read "Driver location updating live..." whatever was
+  /// happening, including when the driver's phone had stopped reporting.
+  static ({String text, bool stale})? _driverLocationAge(
+    Map<String, dynamic> data,
+  ) {
+    final at = data['driverLocationAt'];
+    if (at is! Timestamp) return null;
+    final age = DateTime.now().difference(at.toDate());
+    final safeAge = age.isNegative ? Duration.zero : age;
+    final stale = safeAge > kDriverLocationStale;
+    return (
+      text: stale
+          ? "Driver's location last updated ${fixAgeLabel(safeAge)} — "
+                'their phone may have lost signal'
+          : 'Driver location live · updated ${fixAgeLabel(safeAge)}',
+      stale: stale,
+    );
   }
 
   void _startPassengerLocationUpdates() async {
@@ -369,33 +401,11 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
             _showRatingDialog(context, driverId);
           }
 
-          final markers = <Marker>[];
-          if (driverPosition != null) {
-            markers.add(
-              Marker(
-                point: driverPosition,
-                width: 40,
-                height: 40,
-                child: GestureDetector(
-                  onTap: () {
-                    _mapController.move(driverPosition, 16);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('📍 Driver location'),
-                        duration: Duration(seconds: 1),
-                      ),
-                    );
-                  },
-                  child: const Icon(
-                    Icons.electric_rickshaw,
-                    color: AppTheme.primaryBlue,
-                    size: 36,
-                  ),
-                ),
-              ),
-            );
-          }
+          final driverAge = _driverLocationAge(data);
 
+          // The driver is drawn by GlidingMarkerLayer below, so it drives
+          // between readings instead of hopping.
+          final markers = <Marker>[];
           if (_passengerPosition != null) {
             markers.add(
               Marker(
@@ -441,7 +451,11 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                       ),
                     );
                   },
-                  child: const Icon(Icons.flag, color: AppTheme.warning, size: 28),
+                  child: const Icon(
+                    Icons.flag,
+                    color: AppTheme.warning,
+                    size: 28,
+                  ),
                 ),
               ),
             );
@@ -620,6 +634,25 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                             to: mapCenter,
                           ),
                         MarkerLayer(markers: markers),
+                        GlidingMarkerLayer(
+                          target: driverPosition,
+                          child: GestureDetector(
+                            onTap: () {
+                              if (driverPosition != null) {
+                                _mapController.move(driverPosition, 16);
+                              }
+                            },
+                            child: Icon(
+                              Icons.electric_rickshaw,
+                              // Greyed when the phone has stopped reporting,
+                              // so an old position is not read as current.
+                              color: driverAge?.stale == true
+                                  ? Colors.grey
+                                  : AppTheme.primaryBlue,
+                              size: 36,
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                     // Recenter button
@@ -780,11 +813,13 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                                     fontWeight: FontWeight.w500,
                                   ),
                                 ),
-                                if (hasDriverLocation)
+                                if (hasDriverLocation && driverAge != null)
                                   Text(
-                                    'Driver location updating live...',
-                                    style: const TextStyle(
-                                      color: AppTheme.textMuted,
+                                    driverAge.text,
+                                    style: TextStyle(
+                                      color: driverAge.stale
+                                          ? AppTheme.warning
+                                          : AppTheme.textMuted,
                                       fontSize: 11,
                                     ),
                                   ),

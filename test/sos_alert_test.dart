@@ -3,6 +3,7 @@
 library;
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:toda_equeue_plus/core/models/sos_alert.dart';
 
 DateTime? _date(dynamic v) => v is DateTime ? v : null;
@@ -255,6 +256,25 @@ void main() {
     expect(trip.driverPhone, '0917 000 0001');
     expect(trip.tripStatus, 'TRIP_IN_PROGRESS');
     expect(SosTrip.fromMap(trip.toMap())!.passengerId, 'p1');
+  });
+
+  group('the path an open alert records', () {
+    const start = LatLng(14.9540, 120.9010);
+    LatLng north(double m) =>
+        LatLng(start.latitude + m / 111320.0, start.longitude);
+
+    test('starts with the first reading', () {
+      expect(extendsSosPath(null, start), isTrue);
+    });
+
+    test('adds a point once they have moved ten metres', () {
+      expect(extendsSosPath(start, north(12)), isTrue);
+    });
+
+    test('a phone lying still adds nothing', () {
+      // Heartbeats every 15 s must not fill the record with one spot.
+      expect(extendsSosPath(start, north(3)), isFalse);
+    });
   });
 
   test('a last known position older than ten minutes is not sent', () {

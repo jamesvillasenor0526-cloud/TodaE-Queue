@@ -17,6 +17,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:latlong2/latlong.dart';
 
 import '../models/sos_alert.dart';
 import '../models/trip_state.dart';
@@ -172,17 +173,25 @@ class SosService {
   Timer? _heartbeat;
   String? _trackingId;
   DateTime? _lastWrite;
+  LatLng? _lastPathPoint;
+  int _pathPoints = 0;
+  Position? _held;
+  Timer? _holdTimer;
 
-  /// Writes are at most this frequent while following an alert.
-  static const Duration _trackEvery = Duration(seconds: 10);
+  /// Writes are at most this frequent while following an alert: often
+  /// enough that the admin's map follows a moving tricycle as it goes, which
+  /// the dashboard glides between. An alert lasts minutes, so the extra
+  /// writes are few.
+  static const Duration _trackEvery = Duration(seconds: 3);
 
   /// The longest a still phone goes without sending a fresh fix.
   ///
-  /// The stream only reports movement of 15 m or more, so someone who has
-  /// stopped — held somewhere, or collapsed — sent nothing, and responders
-  /// saw "updated 3 min ago" on the second end-to-end test and could not
-  /// tell a person standing still from a phone that had gone quiet.
-  static const Duration _heartbeatEvery = Duration(minutes: 1);
+  /// The stream only reports movement, so someone who has stopped — held
+  /// somewhere, or collapsed — sent nothing, and responders saw "updated 3
+  /// min ago" on the second end-to-end test and could not tell a person
+  /// standing still from a phone that had gone quiet. Every 15 s keeps the
+  /// dashboard's LIVE label honest.
+  static const Duration _heartbeatEvery = Duration(seconds: 15);
 
   /// Keeps [alertId]'s location current while it is open. Safe to call
   /// repeatedly — the SOS screen and the SOS button both do.
@@ -196,19 +205,40 @@ class SosService {
   Future<void> _startTracking(String alertId) async {
     if (!await _locationAllowed()) return;
     if (_trackingId != alertId) return;
-    _tracking =
-        Geolocator.getPositionStream(
-          locationSettings: const LocationSettings(
+    // On Android the interval must be asked for: left to itself the system
+    // delivered a reading only every 5 s, whatever the write rate, which is
+    // what the first live-map test measured.
+    final settings = defaultTargetPlatform == TargetPlatform.android
+        ? AndroidSettings(
             accuracy: LocationAccuracy.high,
-            distanceFilter: 15,
-          ),
-        ).listen((p) {
-          final now = DateTime.now();
-          if (_lastWrite != null && now.difference(_lastWrite!) < _trackEvery) {
-            return;
+            distanceFilter: 3,
+            intervalDuration: const Duration(seconds: 1),
+          )
+        : const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 3,
+          );
+    _tracking = Geolocator.getPositionStream(locationSettings: settings).listen(
+      (p) {
+        // A reading that comes too soon is held and sent when the window
+        // ends, not dropped: dropping it halved the rate on the first
+        // test, and the last reading before stopping is where they are.
+        _held = p;
+        if (_holdTimer?.isActive ?? false) return;
+        final last = _lastWrite;
+        final wait = last == null
+            ? Duration.zero
+            : _trackEvery - DateTime.now().difference(last);
+        _holdTimer = Timer(wait.isNegative ? Duration.zero : wait, () {
+          final held = _held;
+          _held = null;
+          if (held != null && _trackingId == alertId) {
+            _writeLocation(alertId, held);
           }
-          _writeLocation(alertId, p);
-        }, onError: (Object e) => debugPrint('SOS: tracking error: $e'));
+        });
+      },
+      onError: (Object e) => debugPrint('SOS: tracking error: $e'),
+    );
     _heartbeat = Timer.periodic(_heartbeatEvery, (_) async {
       final last = _lastWrite;
       if (last != null &&
@@ -232,9 +262,29 @@ class SosService {
 
   void _writeLocation(String alertId, Position p) {
     _lastWrite = DateTime.now();
+    final at = LatLng(p.latitude, p.longitude);
+    // The way they have come, for responders: which road, which direction.
+    // A point only every [kSosPathStepMeters], so a still phone's heartbeat
+    // adds nothing and the record stays small.
+    final extend =
+        _pathPoints < kSosPathMaxPoints && extendsSosPath(_lastPathPoint, at);
+    if (extend) {
+      _lastPathPoint = at;
+      _pathPoints++;
+    }
     _alerts
         .doc(alertId)
-        .update(_locationFields(p, SosLocationSource.gps))
+        .update({
+          ..._locationFields(p, SosLocationSource.gps),
+          if (extend)
+            'path': FieldValue.arrayUnion([
+              {
+                'lat': p.latitude,
+                'lng': p.longitude,
+                'at': Timestamp.fromDate(p.timestamp),
+              },
+            ]),
+        })
         .catchError((Object e) => debugPrint('SOS: location update: $e'));
   }
 
@@ -243,8 +293,13 @@ class SosService {
     _tracking = null;
     _heartbeat?.cancel();
     _heartbeat = null;
+    _holdTimer?.cancel();
+    _holdTimer = null;
+    _held = null;
     _trackingId = null;
     _lastWrite = null;
+    _lastPathPoint = null;
+    _pathPoints = 0;
   }
 
   /// "I'm safe." Recorded as a cancellation, not a resolution, so admins can

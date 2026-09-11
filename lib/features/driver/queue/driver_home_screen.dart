@@ -16,7 +16,6 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import '../../../core/services/cloudinary_service.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../../config/theme_controller.dart';
 import '../../../widgets/shimmer_loading.dart';
 import '../../../widgets/state_views.dart';
@@ -32,6 +31,7 @@ import '../../shared/navigation/gliding_marker_layer.dart';
 import '../../shared/navigation/trip_route_layer.dart';
 import '../../shared/reports/my_reports_screen.dart';
 import '../../shared/sos/sos_button.dart';
+import '../../../core/services/phone_actions.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   const DriverHomeScreen({super.key});
@@ -509,19 +509,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     }
   }
 
-  void _callPassenger(String phoneNumber) async {
-    final url = Uri.parse('tel:$phoneNumber');
-    if (await canLaunchUrl(url)) {
-      await launchUrl(url);
-    }
-  }
+  // These asked canLaunchUrl first, which on Android 11+ said no without the
+  // manifest declaring the dialer and SMS app, so the buttons did nothing.
+  // See phone_actions.dart.
+  void _callPassenger(String phoneNumber) =>
+      callNumber(context, phoneNumber, who: 'The passenger');
 
-  void _messagePassenger(String phoneNumber) async {
-    final url = Uri.parse('sms:$phoneNumber');
-    if (await canLaunchUrl(url)) {
-      await launchUrl(url);
-    }
-  }
+  void _messagePassenger(String phoneNumber) =>
+      textNumber(context, phoneNumber, who: 'The passenger');
 
   @override
   Widget build(BuildContext context) {
@@ -1115,6 +1110,17 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
                           ),
                           const SizedBox(height: 16),
 
+                          // Who is being picked up, and a way to reach them,
+                          // first: it is what a driver looks for when the
+                          // passenger is not at the pickup. It used to sit at
+                          // the very bottom, below the fare, map and buttons.
+                          _PassengerCard(
+                            passengerId: data['passengerId'] as String?,
+                            onCall: widget.onCallPassenger,
+                            onMessage: widget.onMessagePassenger,
+                          ),
+                          const SizedBox(height: 16),
+
                           // Everything in a StreamBuilder for live updates
                           StreamBuilder<DocumentSnapshot>(
                             stream: FirebaseFirestore.instance
@@ -1278,159 +1284,6 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
                                       bookingId: data['bookingId'] as String,
                                       onTripFinished: widget.onCompleteTrip,
                                     ),
-                                ],
-                              );
-                            },
-                          ),
-                          const SizedBox(height: 12),
-
-                          // Passenger info card (always show)
-                          FutureBuilder<DocumentSnapshot>(
-                            future: FirebaseFirestore.instance
-                                .collection('users')
-                                .doc(data['passengerId'] as String? ?? '')
-                                .get(),
-                            builder: (context, passengerSnap) {
-                              if (!passengerSnap.hasData) {
-                                return const SizedBox.shrink();
-                              }
-
-                              final passengerData =
-                                  passengerSnap.data!.data()
-                                      as Map<String, dynamic>?;
-                              final passengerName =
-                                  passengerData?['name'] ?? 'Passenger';
-                              final passengerPhoto =
-                                  passengerData?['profilePhotoUrl'] as String?;
-                              final passengerPhone =
-                                  passengerData?['phone'] as String?;
-
-                              return Column(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color: Colors.blue.withValues(
-                                        alpha: 0.05,
-                                      ),
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: Colors.blue.withValues(
-                                          alpha: 0.2,
-                                        ),
-                                      ),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        CircleAvatar(
-                                          radius: 24,
-                                          backgroundColor:
-                                              AppTheme.primaryGreen,
-                                          backgroundImage:
-                                              passengerPhoto != null
-                                              ? NetworkImage(passengerPhoto)
-                                              : null,
-                                          child: passengerPhoto == null
-                                              ? Text(
-                                                  passengerName
-                                                      .substring(0, 1)
-                                                      .toUpperCase(),
-                                                  style: const TextStyle(
-                                                    fontSize: 18,
-                                                    color: Colors.white,
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
-                                                )
-                                              : null,
-                                        ),
-                                        const SizedBox(width: 12),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              const Text(
-                                                'Passenger',
-                                                style: TextStyle(
-                                                  fontSize: 11,
-                                                  color: AppTheme.textMuted,
-                                                ),
-                                              ),
-                                              Text(
-                                                passengerName,
-                                                style: const TextStyle(
-                                                  fontSize: 15,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              ),
-                                              if (passengerPhone != null)
-                                                Text(
-                                                  passengerPhone,
-                                                  style: const TextStyle(
-                                                    fontSize: 12,
-                                                    color: AppTheme.textMuted,
-                                                  ),
-                                                ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  if (passengerPhone != null) ...[
-                                    const SizedBox(height: 8),
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: OutlinedButton.icon(
-                                            onPressed: () =>
-                                                widget.onCallPassenger(
-                                                  passengerPhone,
-                                                ),
-                                            icon: const Icon(
-                                              Icons.call,
-                                              size: 16,
-                                            ),
-                                            label: const Text(
-                                              'Call',
-                                              style: TextStyle(fontSize: 12),
-                                            ),
-                                            style: OutlinedButton.styleFrom(
-                                              foregroundColor:
-                                                  AppTheme.primaryBlue,
-                                              side: const BorderSide(
-                                                color: AppTheme.primaryBlue,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: OutlinedButton.icon(
-                                            onPressed: () =>
-                                                widget.onMessagePassenger(
-                                                  passengerPhone,
-                                                ),
-                                            icon: const Icon(
-                                              Icons.message,
-                                              size: 16,
-                                            ),
-                                            label: const Text(
-                                              'Message',
-                                              style: TextStyle(fontSize: 12),
-                                            ),
-                                            style: OutlinedButton.styleFrom(
-                                              foregroundColor:
-                                                  AppTheme.primaryGreen,
-                                              side: const BorderSide(
-                                                color: AppTheme.primaryGreen,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
                                 ],
                               );
                             },
@@ -4256,6 +4109,155 @@ class _MapLegNotice extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Who the driver is picking up, with Call and Message.
+///
+/// The profile is fetched once. It used to be fetched inside the build, so
+/// every refresh of the trip screen — several a minute while the trip's
+/// record updates — read the passenger's profile from the database again.
+class _PassengerCard extends StatefulWidget {
+  const _PassengerCard({
+    required this.passengerId,
+    required this.onCall,
+    required this.onMessage,
+  });
+
+  final String? passengerId;
+  final void Function(String) onCall;
+  final void Function(String) onMessage;
+
+  @override
+  State<_PassengerCard> createState() => _PassengerCardState();
+}
+
+class _PassengerCardState extends State<_PassengerCard> {
+  late Future<DocumentSnapshot<Map<String, dynamic>>>? _profile = _load();
+
+  Future<DocumentSnapshot<Map<String, dynamic>>>? _load() {
+    final id = widget.passengerId;
+    if (id == null || id.isEmpty) return null;
+    return FirebaseFirestore.instance.collection('users').doc(id).get();
+  }
+
+  @override
+  void didUpdateWidget(_PassengerCard old) {
+    super.didUpdateWidget(old);
+    if (old.passengerId != widget.passengerId) _profile = _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final profile = _profile;
+    if (profile == null) return const SizedBox.shrink();
+    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      future: profile,
+      builder: (context, snap) {
+        if (!snap.hasData) return const SizedBox.shrink();
+        final data = snap.data!.data();
+        final rawName = (data?['name'] as String?)?.trim();
+        final name = (rawName == null || rawName.isEmpty)
+            ? 'Passenger'
+            : rawName;
+        final photo = data?['profilePhotoUrl'] as String?;
+        final phone = dialableNumber(data?['phone'] as String?);
+
+        return Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.blue.withValues(alpha: 0.2)),
+              ),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 24,
+                    backgroundColor: AppTheme.primaryGreen,
+                    backgroundImage: photo != null ? NetworkImage(photo) : null,
+                    child: photo == null
+                        ? Text(
+                            name.substring(0, 1).toUpperCase(),
+                            style: const TextStyle(
+                              fontSize: 18,
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          )
+                        : null,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Passenger',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppTheme.textMuted,
+                          ),
+                        ),
+                        Text(
+                          name,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          phone ?? 'No phone number on file',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppTheme.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (phone != null) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => widget.onCall(phone),
+                      icon: const Icon(Icons.call, size: 16),
+                      label: const Text('Call', style: TextStyle(fontSize: 12)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppTheme.primaryBlue,
+                        side: const BorderSide(color: AppTheme.primaryBlue),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => widget.onMessage(phone),
+                      icon: const Icon(Icons.message, size: 16),
+                      label: const Text(
+                        'Message',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppTheme.primaryGreen,
+                        side: const BorderSide(color: AppTheme.primaryGreen),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        );
+      },
     );
   }
 }

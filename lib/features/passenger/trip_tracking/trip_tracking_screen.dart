@@ -20,7 +20,7 @@ import '../../../core/services/trip_service.dart';
 import '../../shared/reports/report_map_layer.dart';
 import '../../shared/navigation/gliding_marker_layer.dart';
 import '../../shared/navigation/trip_route_layer.dart';
-import 'package:url_launcher/url_launcher.dart';
+import '../../../core/services/phone_actions.dart';
 
 class TripTrackingScreen extends StatefulWidget {
   final String bookingId;
@@ -252,64 +252,36 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
     return a ?? b ?? _baliwagCenter;
   }
 
-  void _callDriver(String phoneNumber) async {
-    final formatted = phoneNumber.replaceAll(' ', '').replaceAll('-', '');
-    final url = Uri.parse('tel:$formatted');
-
-    debugPrint('🔍 Attempting to call: $formatted');
-
+  /// The driver's number: from the booking, or else from their profile.
+  ///
+  /// Only 26 of 63 bookings carry the driver's number, and the buttons did
+  /// nothing at all without it. They also asked canLaunchUrl first, which
+  /// on Android 11+ said no to every number (see phone_actions.dart).
+  Future<String?> _driverPhone(Map<String, dynamic> booking) async {
+    final onBooking = booking['driverPhone'] as String?;
+    if (dialableNumber(onBooking) != null) return onBooking;
+    final driverId = booking['driverId'] as String?;
+    if (driverId == null || driverId.isEmpty) return null;
     try {
-      if (await canLaunchUrl(url)) {
-        await launchUrl(url, mode: LaunchMode.externalApplication);
-      } else {
-        debugPrint('❌ No dialer app found');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('No dialer app found. Call manually: $formatted'),
-              duration: const Duration(seconds: 3),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      debugPrint('❌ Call error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not make call. Number: $formatted')),
-        );
-      }
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(driverId)
+          .get()
+          .timeout(const Duration(seconds: 6));
+      return doc.data()?['phone'] as String?;
+    } catch (_) {
+      return null;
     }
   }
 
-  void _messageDriver(String phoneNumber) async {
-    final formatted = phoneNumber.replaceAll(' ', '').replaceAll('-', '');
-    final url = Uri.parse('sms:$formatted');
+  Future<void> _callDriver(Map<String, dynamic> booking) async {
+    final phone = await _driverPhone(booking);
+    if (mounted) await callNumber(context, phone, who: 'The driver');
+  }
 
-    debugPrint('🔍 Attempting to message: $formatted');
-
-    try {
-      if (await canLaunchUrl(url)) {
-        await launchUrl(url, mode: LaunchMode.externalApplication);
-      } else {
-        debugPrint('❌ No SMS app found');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('No SMS app found. Message manually: $formatted'),
-              duration: const Duration(seconds: 3),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      debugPrint('❌ SMS error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not send message. Number: $formatted')),
-        );
-      }
-    }
+  Future<void> _messageDriver(Map<String, dynamic> booking) async {
+    final phone = await _driverPhone(booking);
+    if (mounted) await textNumber(context, phone, who: 'The driver');
   }
 
   @override
@@ -572,10 +544,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                   children: [
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () {
-                          final phone = data['driverPhone'] as String?;
-                          if (phone != null) _callDriver(phone);
-                        },
+                        onPressed: () => _callDriver(data),
                         icon: const Icon(Icons.call, size: 16),
                         label: const Text(
                           'Call Driver',
@@ -590,10 +559,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () {
-                          final phone = data['driverPhone'] as String?;
-                          if (phone != null) _messageDriver(phone);
-                        },
+                        onPressed: () => _messageDriver(data),
                         icon: const Icon(Icons.message, size: 16),
                         label: const Text(
                           'Message',

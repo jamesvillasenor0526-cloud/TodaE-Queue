@@ -39,6 +39,38 @@ service cloud.firestore {
              .data.get('role', '') in ['toda_admin', 'super_admin'];
     }
 
+    function isSuperAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid))
+             .data.get('role', '') == 'super_admin';
+    }
+
+    // Only the super admin makes or unmakes admins. A TODA admin approving
+    // drivers changes isVerified, never role; before this, one could create
+    // or promote anyone to any role, super_admin included.
+    function roleChangeAllowed() {
+      return isSuperAdmin()
+        || request.resource.data.get('role', '')
+             == resource.data.get('role', '');
+    }
+
+    function newRoleAllowed() {
+      return isSuperAdmin()
+        || request.resource.data.get('role', 'passenger')
+             in ['passenger', 'driver'];
+    }
+
+    // The booking a rating is for, and whether it has ended.
+    function bookingOf(bookingId) {
+      return get(/databases/$(database)/documents/bookings/$(bookingId)).data;
+    }
+
+    function bookingEnded(b) {
+      return b.get('tripStatus', '') == 'TRIP_COMPLETED'
+        || b.get('status', '') == 'completed';
+    }
+
     // Approval and role must survive a self-update untouched.
     function keepsApprovalFields() {
       return request.resource.data.isVerified == resource.data.isVerified
@@ -47,10 +79,14 @@ service cloud.firestore {
     }
 
     // Terminals — public read so the registration screen can list them
-    // before the user has an account.
+    // before the user has an account. Written only by admins: any signed-in
+    // user, passengers included, could add, move or delete a terminal. No
+    // app or dashboard screen writes terminals; they are set up from the
+    // Firebase console, which these rules do not restrict.
     match /terminals/{terminalId} {
       allow read: if true;
-      allow write: if signedIn();
+      allow create, update: if isAdmin();
+      allow delete: if false;
     }
 
     // Users — profiles are read across roles (a passenger reads their
@@ -65,14 +101,14 @@ service cloud.firestore {
                         && request.resource.data.get('isVerified', false) == false
                         && request.resource.data.get('role', 'passenger')
                              in ['passenger', 'driver'])
-                    || isAdmin();
+                    || (isAdmin() && newRoleAllowed());
 
       // Own profile minus the approval fields, or an admin (this is the
       // path driver approval goes through).
       allow update: if (signedIn()
                         && request.auth.uid == userId
                         && keepsApprovalFields())
-                    || isAdmin();
+                    || (isAdmin() && roleChangeAllowed());
 
       allow delete: if false;
     }
@@ -89,9 +125,32 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Ratings — one per trip, by that trip's passenger, once it has ended.
+    // The rating's id is the booking's, so a second submission is an update
+    // and refused, rather than a duplicate: two trips in the database were
+    // rated twice, because the old dialog failed after saving and was sent
+    // again. Before this anyone could rate any driver, any number of times.
     match /ratings/{ratingId} {
       allow read: if signedIn();
-      allow create, update: if signedIn();
+
+      allow create: if signedIn()
+        && ratingId == request.resource.data.bookingId
+        && request.resource.data.passengerId == request.auth.uid
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && bookingOf(ratingId).get('passengerId', '') == request.auth.uid
+        && bookingOf(ratingId).get('driverId', '')
+             == request.resource.data.driverId
+        && bookingEnded(bookingOf(ratingId));
+
+      // The rated driver may reply, and change nothing else.
+      allow update: if (signedIn()
+          && resource.data.driverId == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['driverReply', 'repliedAt']))
+        || isAdmin();
+
       allow delete: if false;
     }
 

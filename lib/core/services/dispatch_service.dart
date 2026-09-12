@@ -220,27 +220,9 @@ class DispatchService {
       },
     });
 
-    final receiptNumber = await ReceiptService.instance.generateReceipt(
-      bookingId: bookingId,
-      passengerId: bookingData['passengerId'] ?? '',
-      passengerName: bookingData['passengerName'] ?? 'Passenger',
-      driverId: bookingData['driverId'] ?? '',
-      driverName: bookingData['driverName'] ?? 'Driver',
-      terminalName: bookingData['terminalName'] ?? 'Terminal',
-      pickupLat: (bookingData['pickupLatitude'] ?? 0).toDouble(),
-      pickupLng: (bookingData['pickupLongitude'] ?? 0).toDouble(),
-      destinationLat: (bookingData['destinationLatitude'] ?? 0).toDouble(),
-      destinationLng: (bookingData['destinationLongitude'] ?? 0).toDouble(),
-      distance: (bookingData['distance'] ?? 0).toDouble(),
-      fare: (bookingData['fare'] ?? 0).toDouble(),
-      paymentMethod: paymentMethod,
-      pickupFee: (bookingData['pickupFee'] ?? FareService.pickupFee).toDouble(),
-      baseFare: FareService.minimumFare,
-    );
-
-    await ReceiptService.instance.updateBookingWithReceipt(
-      bookingId: bookingId,
-      receiptNumber: receiptNumber,
-    );
+    // The receipt is read back off the booking this writes, so it is made
+    // from one place for every way a payment can settle. A receipt that
+    // cannot be made must not report the payment as failed: it went through.
+    await ReceiptService.instance.ensureReceiptQuietly(bookingId);
   }
 }

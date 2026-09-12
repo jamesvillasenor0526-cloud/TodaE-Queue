@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/trip_state.dart';
 import 'notification_service.dart';
+import 'receipt_service.dart';
 
 /// Raised when a transition is refused. The message is safe to show a user.
 class TripTransitionException implements Exception {
@@ -133,6 +134,13 @@ class TripService {
 
       tx.update(ref, update);
     });
+
+    // Cash settled here used to leave the trip paid with no receipt at all —
+    // only the GCash path ever made one. Never allowed to fail the payment:
+    // it is remade whenever the trip is opened.
+    if (to == PaymentState.paymentConfirmed) {
+      await ReceiptService.instance.ensureReceiptQuietly(bookingId);
+    }
 
     await _notifyPayment(to);
   }

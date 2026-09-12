@@ -32,6 +32,7 @@ import '../../shared/navigation/trip_route_layer.dart';
 import '../../shared/reports/my_reports_screen.dart';
 import '../../shared/sos/sos_button.dart';
 import '../../../core/services/phone_actions.dart';
+import '../../../core/services/rating_service.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   const DriverHomeScreen({super.key});
@@ -67,6 +68,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     super.initState();
     _startLocationWatch();
     _watchActiveBooking();
+    // Passengers cannot write a driver's profile, so the rating they leave
+    // never reached this driver's average. Their own app keeps it in step.
+    RatingService.instance.syncMyAverage();
   }
 
   @override
@@ -75,6 +79,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     _positionSub?.cancel();
     _pushTimer?.cancel();
     _heartbeat?.cancel();
+    RatingService.instance.stop();
     _geofence.stopTracking();
     super.dispose();
   }

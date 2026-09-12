@@ -16,6 +16,7 @@ import '../../../core/models/location_fix.dart';
 import '../../../core/models/location_need.dart';
 import '../../../core/models/trip_state.dart';
 import '../../../core/services/location_hub.dart';
+import '../../../core/services/receipt_service.dart';
 import '../../../core/services/trip_service.dart';
 import '../../shared/reports/report_map_layer.dart';
 import '../../shared/navigation/gliding_marker_layer.dart';
@@ -41,6 +42,9 @@ class TripTrackingScreen extends StatefulWidget {
 class _TripTrackingScreenState extends State<TripTrackingScreen> {
   static const LatLng _baliwagCenter = LatLng(14.9540, 120.9010);
   bool _ratingShown = false;
+
+  /// Asked once per visit: see the receipt check in build.
+  bool _receiptChecked = false;
 
   StreamSubscription<Position>? _positionStream;
   LatLng? _passengerPosition;
@@ -147,10 +151,26 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
   void _showRatingDialog(BuildContext context, String driverId) {
     if (_ratingShown) return;
     _ratingShown = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      // Nothing to ask if this trip has already been rated — from this
+      // phone or another. Old ratings carry a random id, so this looks the
+      // trip up by its booking rather than by the rating's id.
+      try {
+        final existing = await FirebaseFirestore.instance
+            .collection('ratings')
+            .where('bookingId', isEqualTo: widget.bookingId)
+            .limit(1)
+            .get();
+        if (existing.docs.isNotEmpty || !mounted) return;
+      } catch (_) {
+        // Could not check; better to offer the rating than to lose it.
+      }
       if (!mounted) return;
       showDialog(
-        context: context,
+        // This screen's own context: the one passed in was captured before
+        // the lookup above.
+        context: this.context,
         barrierDismissible: false,
         builder: (c) => _RatingDialog(
           bookingId: widget.bookingId,
@@ -373,6 +393,16 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
 
           if (tripCompleted && !_ratingShown) {
             _showRatingDialog(context, driverId);
+          }
+
+          // A trip paid before receipts were made from one place can still
+          // be missing one; three in the database are. Making it here means
+          // opening the trip is enough to put that right.
+          if (!_receiptChecked &&
+              TripState.fromMap(widget.bookingId, data).payment.isSettled &&
+              data['receiptNumber'] == null) {
+            _receiptChecked = true;
+            ReceiptService.instance.ensureReceiptQuietly(widget.bookingId);
           }
 
           final driverAge = _driverLocationAge(data);
@@ -893,38 +923,41 @@ class _RatingDialogState extends State<_RatingDialog> {
     setState(() => _sub = true);
     try {
       final pid = FirebaseAuth.instance.currentUser!.uid;
-      await FirebaseFirestore.instance.collection('ratings').add({
-        'bookingId': widget.bookingId,
-        'driverId': widget.driverId,
-        'passengerId': pid,
-        'rating': _rating,
-        'comment': _c.text.trim(),
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-      final snap = await FirebaseFirestore.instance
-          .collection('ratings')
-          .where('driverId', isEqualTo: widget.driverId)
-          .get();
-      final r = snap.docs
-          .map((d) => (d.data()['rating'] as num).toDouble())
-          .toList();
+      // The trip's own id, so the same trip cannot be rated twice. The
+      // driver's average is kept by the driver's app (RatingService):
+      // writing it from here was refused every time, which is why every
+      // rating ended in "Failed" and some were sent again.
       await FirebaseFirestore.instance
-          .collection('users')
-          .doc(widget.driverId)
-          .update({
-            'averageRating': double.parse(
-              (r.reduce((a, b) => a + b) / r.length).toStringAsFixed(1),
-            ),
-            'totalRatings': r.length,
+          .collection('ratings')
+          .doc(widget.bookingId)
+          .set({
+            'bookingId': widget.bookingId,
+            'driverId': widget.driverId,
+            'passengerId': pid,
+            'rating': _rating,
+            'comment': _c.text.trim(),
+            'createdAt': FieldValue.serverTimestamp(),
           });
       if (mounted) widget.onDone();
-    } catch (e) {
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
       setState(() => _sub = false);
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed: $e')));
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            e.code == 'permission-denied'
+                ? 'This trip has already been rated.'
+                : 'Could not send your rating. Please try again.',
+          ),
+        ),
+      );
+      if (e.code == 'permission-denied') widget.onSkip();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _sub = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not send your rating.')),
+      );
     }
   }
 

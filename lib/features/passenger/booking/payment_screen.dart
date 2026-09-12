@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../config/theme.dart';
-import '../../../core/services/dispatch_service.dart';
+import '../../../core/models/trip_state.dart';
 import '../../../core/services/fare_service.dart';
+import '../../../core/services/trip_service.dart';
 
 class PaymentScreen extends StatefulWidget {
   final String bookingId;
@@ -29,21 +30,29 @@ class PaymentScreen extends StatefulWidget {
 class _PaymentScreenState extends State<PaymentScreen> {
   bool _isConfirming = false;
 
+  /// Tells the driver the GCash payment has been sent, for them to check.
+  ///
+  /// This used to mark the trip paid outright — the passenger confirmed
+  /// their own payment, the receipt was written, and the driver never got
+  /// to say whether the money had actually arrived. Cash already worked
+  /// this way; now both do.
   Future<void> _confirmPayment() async {
     setState(() => _isConfirming = true);
     try {
-      await DispatchService.instance.confirmPayment(
+      await TripService.instance.movePayment(
         bookingId: widget.bookingId,
-        paymentMethod: 'gcash',
+        to: PaymentState.paymentSubmitted,
+        by: TripRole.passenger,
+        method: 'gcash',
       );
       if (!mounted) return;
       Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
       setState(() => _isConfirming = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not confirm payment: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not tell your driver: $e')));
     }
   }
 
@@ -120,11 +129,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   .doc(widget.driverId)
                   .get(),
               builder: (context, driverSnap) {
-                final gcashQrUrl =
-                    driverSnap.data?.data() != null
-                        ? (driverSnap.data!.data() as Map<String, dynamic>)['gcashQrUrl']
-                              as String?
-                        : null;
+                final gcashQrUrl = driverSnap.data?.data() != null
+                    ? (driverSnap.data!.data()
+                              as Map<String, dynamic>)['gcashQrUrl']
+                          as String?
+                    : null;
 
                 if (gcashQrUrl == null) {
                   return Container(
@@ -140,13 +149,19 @@ class _PaymentScreenState extends State<PaymentScreen> {
                         Text(
                           'Driver has no GCash QR code.',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: AppTheme.warning, fontSize: 14),
+                          style: TextStyle(
+                            color: AppTheme.warning,
+                            fontSize: 14,
+                          ),
                         ),
                         SizedBox(height: 8),
                         Text(
                           'Please ask the driver for their GCash number.',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                          style: TextStyle(
+                            color: AppTheme.textMuted,
+                            fontSize: 12,
+                          ),
                         ),
                       ],
                     ),
@@ -185,7 +200,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
                         const Text(
                           'Open GCash app → Scan QR → Pay',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                          style: TextStyle(
+                            color: AppTheme.textMuted,
+                            fontSize: 12,
+                          ),
                         ),
                       ],
                     ),
@@ -211,7 +229,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       )
                     : const Icon(Icons.check_circle),
                 label: Text(
-                  _isConfirming ? 'Confirming...' : 'I\'ve Paid',
+                  _isConfirming ? 'Telling your driver…' : "I've Paid",
                   style: const TextStyle(fontSize: 16, color: Colors.white),
                 ),
                 style: ElevatedButton.styleFrom(
@@ -225,9 +243,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
-              '* Payment must be completed before the driver arrives',
+              'Your driver checks that the payment arrived before the trip '
+              'starts.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: AppTheme.errorRed, fontSize: 11),
+              style: TextStyle(color: AppTheme.textMuted, fontSize: 11),
             ),
           ],
         ),
@@ -239,7 +258,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: const TextStyle(color: AppTheme.textMuted, fontSize: 13)),
+        Text(
+          label,
+          style: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
+        ),
         Text(
           value,
           style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),

@@ -4,23 +4,28 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+import '../../config/api_keys.dart';
 import '../models/place_search.dart';
+import 'tomtom_router.dart';
 
 class GeocodingService {
   static final GeocodingService instance = GeocodingService._();
   GeocodingService._();
 
-  /// OpenStreetMap's search allows about one request a second and asks that
-  /// answers be reused, so searches queue a second apart and each query is
-  /// remembered. TomTom's search would need no queue, but this project's key
-  /// is refused by their search endpoints (an account "view" setting), while
-  /// their routing works — so the map's own search is used.
+  /// OpenStreetMap's search — the fallback — allows about one request a
+  /// second, so those are queued a second apart. TomTom needs no queue.
+  /// Either way each answer is remembered, so the same query is not asked
+  /// twice.
   static const Duration _searchGap = Duration(milliseconds: 1100);
   final Map<String, List<PlaceHit>> _searched = {};
-  DateTime _nextSearch = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _nextOsmSearch = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// Places matching [query], nearest [near] first. Empty when there is
-  /// nothing to search for, nothing found, or the search cannot be reached.
+  /// nothing to search for, nothing found, or no search can be reached.
+  ///
+  /// TomTom first: it knows local businesses by name, which is what a
+  /// passenger types. OpenStreetMap answers when TomTom has no key, fails,
+  /// or finds nothing — it is stronger on barangays and small landmarks.
   Future<List<PlaceHit>> searchPlaces(
     String query, {
     required LatLng near,
@@ -31,15 +36,61 @@ class GeocodingService {
     final remembered = _searched[key];
     if (remembered != null) return nearestFirst(remembered, near);
 
-    final wait = _nextSearch.difference(DateTime.now());
-    _nextSearch = DateTime.now().add(
+    var hits = await _searchTomTom(trimmed, near);
+    // Ask the other map too when TomTom found nothing, or nothing nearby:
+    // it is the one that knows barangays and small landmarks.
+    if (nearestMeters(hits, near) > kFarResultMeters) {
+      hits = mergePlaces(hits, await _searchOpenStreetMap(trimmed));
+    }
+    if (hits.isEmpty) return const [];
+
+    if (_searched.length > 60) _searched.clear();
+    _searched[key] = hits;
+    return nearestFirst(hits, near);
+  }
+
+  Future<List<PlaceHit>> _searchTomTom(String query, LatLng near) async {
+    if (!TomTomRouter.isConfigured) return const [];
+    final uri = Uri.https(
+      'api.tomtom.com',
+      '/search/2/search/${Uri.encodeComponent(query)}.json',
+      {
+        'key': ApiKeys.tomTom,
+        // Must be given: this key carries a default geopolitical view of
+        // 'PH', which TomTom itself rejects as invalid, so every search
+        // failed with "'PH' is not a valid view" until one was passed.
+        'view': 'Unified',
+        'limit': '6',
+        // Around where the passenger is looking, not the whole country.
+        'lat': '${near.latitude}',
+        'lon': '${near.longitude}',
+        'radius': '40000',
+        'typeahead': 'true',
+      },
+    );
+    try {
+      final response = await http.get(uri).timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) {
+        debugPrint('TomTom place search returned ${response.statusCode}');
+        return const [];
+      }
+      return parseTomTomPlaces(response.body);
+    } catch (e) {
+      debugPrint('TomTom place search unavailable: $e');
+      return const [];
+    }
+  }
+
+  Future<List<PlaceHit>> _searchOpenStreetMap(String query) async {
+    final wait = _nextOsmSearch.difference(DateTime.now());
+    _nextOsmSearch = DateTime.now().add(
       wait.isNegative ? _searchGap : wait + _searchGap,
     );
     if (!wait.isNegative) await Future<void>.delayed(wait);
 
     final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
       'format': 'jsonv2',
-      'q': trimmed,
+      'q': query,
       'limit': '6',
       'countrycodes': 'ph',
       // A bias, not a fence: a hard boundary hid places whose records sit
@@ -56,10 +107,7 @@ class GeocodingService {
         debugPrint('Place search returned ${response.statusCode}');
         return const [];
       }
-      final hits = parsePlaceSearch(response.body);
-      if (_searched.length > 60) _searched.clear();
-      _searched[key] = hits;
-      return nearestFirst(hits, near);
+      return parsePlaceSearch(response.body);
     } catch (e) {
       debugPrint('Place search unavailable: $e');
       return const [];

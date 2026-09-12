@@ -11,7 +11,38 @@ import 'package:toda_equeue_plus/core/models/place_search.dart';
 String get _jollibee =>
     File('test/fixtures/nominatim_search_jollibee.json').readAsStringSync();
 
+String get _tomTomJollibee =>
+    File('test/fixtures/tomtom_search_jollibee.json').readAsStringSync();
+
 void main() {
+  group('reading a real TomTom search for "jollibee baliwag"', () {
+    test('local branches come back by name', () {
+      final hits = parseTomTomPlaces(_tomTomJollibee);
+      expect(hits, hasLength(greaterThanOrEqualTo(3)));
+      expect(hits.first.name, 'Jollibee Baliuag Bayan');
+      expect(hits.map((h) => h.name), contains('Jollibee SM City Baliuag'));
+      expect(hits.first.at.latitude, closeTo(14.95, 0.1));
+    });
+
+    test('the address says where it is, without the postcode', () {
+      final hits = parseTomTomPlaces(_tomTomJollibee);
+      expect(hits.first.where, contains('Baliwag'));
+      for (final hit in hits) {
+        expect(hit.where, isNot(matches(RegExp(r'\b\d{4}\b'))));
+        expect(hit.where, isNot(contains(hit.name)));
+      }
+    });
+
+    test('a broken answer gives no places rather than throwing', () {
+      expect(parseTomTomPlaces('{"errorText":"not a valid view"}'), isEmpty);
+      expect(parseTomTomPlaces('{"results":[]}'), isEmpty);
+      expect(
+        parseTomTomPlaces('{"results":[{"poi":{"name":"No position"}}]}'),
+        isEmpty,
+      );
+    });
+  });
+
   group('reading a real search for "jollibee baliwag"', () {
     test('every branch comes back with a name and a place', () {
       final hits = parsePlaceSearch(_jollibee);
@@ -70,6 +101,45 @@ void main() {
 
     test('ordering nothing is not an error', () {
       expect(nearestFirst(const [], const LatLng(14.954, 120.901)), isEmpty);
+    });
+  });
+
+  group('asking both maps', () {
+    const near = LatLng(14.954, 120.901);
+    const close = PlaceHit(
+      name: 'SM City Baliwag',
+      where: 'Concepcion, Baliwag',
+      at: LatLng(14.95976, 120.89091),
+    );
+    const far = PlaceHit(
+      name: 'PNB Malolos City-Sto Nino',
+      where: 'Malolos City',
+      at: LatLng(14.84, 120.81),
+    );
+
+    test('a nearby answer is enough on its own', () {
+      expect(nearestMeters(const [close], near), lessThan(kFarResultMeters));
+    });
+
+    test('only far answers means the other map is worth asking', () {
+      // "sto nino" came back from one map as shops 15 km away.
+      expect(nearestMeters(const [far], near), greaterThan(kFarResultMeters));
+      expect(nearestMeters(const [], near), double.infinity);
+    });
+
+    test('merging keeps both maps but not the same place twice', () {
+      const alsoSm = PlaceHit(
+        name: 'SM City Baliuag',
+        where: 'Baliwag, Bulacan',
+        at: LatLng(14.95977, 120.89092), // metres away, same mall
+      );
+      const barangay = PlaceHit(
+        name: 'Santo Niño',
+        where: 'Baliwag, Bulacan',
+        at: LatLng(14.968, 120.896),
+      );
+      final merged = mergePlaces(const [close], const [alsoSm, barangay]);
+      expect(merged.map((p) => p.name), ['SM City Baliwag', 'Santo Niño']);
     });
   });
 

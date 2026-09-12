@@ -93,6 +93,48 @@ List<PlaceHit> parsePlaceSearch(String body) {
   return out;
 }
 
+/// Places from a TomTom search response.
+///
+/// TomTom knows local businesses by name — "Jollibee Baliuag Junction", "SM
+/// City Baliuag" — which is what a passenger searches for. Its search needs
+/// `view=Unified` passed explicitly: this project's key carries an invalid
+/// default view ('PH'), which made every search fail until it was given one.
+List<PlaceHit> parseTomTomPlaces(String body) {
+  final decoded = json.decode(body);
+  if (decoded is! Map || decoded['results'] is! List) return const [];
+  final out = <PlaceHit>[];
+  for (final raw in decoded['results'] as List) {
+    if (raw is! Map) continue;
+    final position = raw['position'];
+    if (position is! Map) continue;
+    final lat = (position['lat'] as num?)?.toDouble();
+    final lng = (position['lon'] as num?)?.toDouble();
+    if (lat == null || lng == null || !lat.isFinite || !lng.isFinite) continue;
+
+    final address = raw['address'] is Map
+        ? (raw['address'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
+    final full = (address['freeformAddress'] as String?)?.trim() ?? '';
+    // The postcode is noise to someone picking a place off a map.
+    final parts = [
+      for (final p in full.split(','))
+        if (p.trim().isNotEmpty && !RegExp(r'^\d{4}$').hasMatch(p.trim()))
+          p.trim(),
+    ];
+
+    final poi = raw['poi'] is Map
+        ? (raw['poi'] as Map)['name'] as String?
+        : null;
+    final name = (poi != null && poi.trim().isNotEmpty)
+        ? poi.trim()
+        : (address['streetName'] as String?)?.trim() ??
+              (parts.isEmpty ? 'Place' : parts.first);
+    final rest = parts.where((p) => p != name).take(3).join(', ');
+    out.add(PlaceHit(name: name, where: rest, at: LatLng(lat, lng)));
+  }
+  return out;
+}
+
 /// [hits] with the places nearest [near] first.
 ///
 /// Nominatim orders by how well known a place is, so without this a search
@@ -111,3 +153,38 @@ List<PlaceHit> nearestFirst(List<PlaceHit> hits, LatLng near) {
 
 /// Whether [query] is worth searching for.
 bool worthSearching(String query) => query.trim().length >= kMinQueryLength;
+
+/// When the best place found is this far from where the passenger is
+/// looking, the other map's search is worth asking as well.
+///
+/// TomTom is strong on businesses but answered "sto nino" with shops 15 km
+/// away, while OpenStreetMap knew the barangay up the road.
+const double kFarResultMeters = 8000;
+
+/// How far the nearest of [hits] is from [near]; infinite when there are
+/// none.
+double nearestMeters(List<PlaceHit> hits, LatLng near) {
+  const distance = Distance();
+  var best = double.infinity;
+  for (final hit in hits) {
+    final d = distance.as(LengthUnit.Meter, near, hit.at);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+/// [first] then [second], without offering the same place twice.
+///
+/// The two maps name things differently, so sameness is judged by position
+/// — within about 25 m — rather than by name.
+List<PlaceHit> mergePlaces(List<PlaceHit> first, List<PlaceHit> second) {
+  const distance = Distance();
+  final out = [...first];
+  for (final candidate in second) {
+    final already = out.any(
+      (kept) => distance.as(LengthUnit.Meter, kept.at, candidate.at) < 25,
+    );
+    if (!already) out.add(candidate);
+  }
+  return out;
+}

@@ -1,0 +1,245 @@
+{
+ "summary": {
+  "query": "jollibee baliwag",
+  "numResults": 3
+ },
+ "results": [
+  {
+   "type": "POI",
+   "id": "55dsnWSATKb3OvB6Y6D_sw",
+   "score": 5.1429839295,
+   "dist": 11.174083,
+   "info": "search:ta:608009001749888-PH",
+   "poi": {
+    "name": "Jollibee Baliuag Bayan",
+    "phone": "+63 44 766 7000",
+    "brands": [
+     {
+      "name": "Jollibee"
+     }
+    ],
+    "categorySet": [
+     {
+      "id": 7315015
+     }
+    ],
+    "url": "www.jollibee.com.ph",
+    "categories": [
+     "fast food",
+     "restaurant"
+    ],
+    "classifications": [
+     {
+      "code": "RESTAURANT",
+      "names": [
+       {
+        "nameLocale": "en-US",
+        "name": "restaurant"
+       },
+       {
+        "nameLocale": "en-US",
+        "name": "fast food"
+       }
+      ]
+     }
+    ]
+   },
+   "address": {
+    "streetName": "Gil Carlos Street",
+    "municipalitySubdivision": "Bagong Nayon",
+    "municipality": "Baliwag",
+    "countrySecondarySubdivision": "Bulacan",
+    "countrySubdivision": "Central Luzon",
+    "countrySubdivisionName": "Central Luzon",
+    "countrySubdivisionCode": "3",
+    "postalCode": "3006",
+    "countryCode": "PH",
+    "country": "Philippines",
+    "countryCodeISO3": "PHL",
+    "freeformAddress": "Gil Carlos Street, Bagong Nayon, Baliwag, 3006, Bulacan",
+    "localName": "Baliwag"
+   },
+   "position": {
+    "lat": 14.9539,
+    "lon": 120.90099
+   },
+   "viewport": {
+    "topLeftPoint": {
+     "lat": 14.9548,
+     "lon": 120.90006
+    },
+    "btmRightPoint": {
+     "lat": 14.953,
+     "lon": 120.90192
+    }
+   },
+   "entryPoints": [
+    {
+     "type": "main",
+     "position": {
+      "lat": 14.95397,
+      "lon": 120.90089
+     }
+    }
+   ]
+  },
+  {
+   "type": "POI",
+   "id": "QH6TnQt19T009Olg6FaCSA",
+   "score": 5.1422218007,
+   "dist": 1087.146559,
+   "info": "search:ta:608009001732821-PH",
+   "poi": {
+    "name": "Jollibee Baliuag Junction",
+    "phone": "+63 44 766 4999",
+    "brands": [
+     {
+      "name": "Jollibee"
+     }
+    ],
+    "categorySet": [
+     {
+      "id": 7315015
+     }
+    ],
+    "url": "www.jollibee.com.ph",
+    "categories": [
+     "fast food",
+     "restaurant"
+    ],
+    "classifications": [
+     {
+      "code": "RESTAURANT",
+      "names": [
+       {
+        "nameLocale": "en-US",
+        "name": "restaurant"
+       },
+       {
+        "nameLocale": "en-US",
+        "name": "fast food"
+       }
+      ]
+     }
+    ]
+   },
+   "address": {
+    "streetName": "B.S. Aquino Avenue",
+    "municipalitySubdivision": "Pagala",
+    "municipality": "Baliwag",
+    "countrySecondarySubdivision": "Bulacan",
+    "countrySubdivision": "Central Luzon",
+    "countrySubdivisionName": "Central Luzon",
+    "countrySubdivisionCode": "3",
+    "postalCode": "3006",
+    "countryCode": "PH",
+    "country": "Philippines",
+    "countryCodeISO3": "PHL",
+    "freeformAddress": "B.S. Aquino Avenue, Pagala, Baliwag, 3006, Bulacan",
+    "localName": "Baliwag"
+   },
+   "position": {
+    "lat": 14.96301,
+    "lon": 120.897071
+   },
+   "viewport": {
+    "topLeftPoint": {
+     "lat": 14.96391,
+     "lon": 120.89614
+    },
+    "btmRightPoint": {
+     "lat": 14.96211,
+     "lon": 120.898
+    }
+   },
+   "entryPoints": [
+    {
+     "type": "main",
+     "position": {
+      "lat": 14.96317,
+      "lon": 120.89696
+     }
+    }
+   ]
+  },
+  {
+   "type": "POI",
+   "id": "NDOKqEUsLCUEWxXGH8xERw",
+   "score": 5.1419616383,
+   "dist": 1259.035119,
+   "info": "search:ta:608009001741392-PH",
+   "poi": {
+    "name": "Jollibee SM City Baliuag",
+    "phone": "+63 44 761 1766",
+    "brands": [
+     {
+      "name": "Jollibee"
+     }
+    ],
+    "categorySet": [
+     {
+      "id": 7315015
+     }
+    ],
+    "url": "www.jollibee.com.ph",
+    "categories": [
+     "fast food",
+     "restaurant"
+    ],
+    "classifications": [
+     {
+      "code": "RESTAURANT",
+      "names": [
+       {
+        "nameLocale": "en-US",
+        "name": "restaurant"
+       },
+       {
+        "nameLocale": "en-US",
+        "name": "fast food"
+       }
+      ]
+     }
+    ]
+   },
+   "address": {
+    "streetName": "Dona Remedios Trinidad Highway",
+    "municipalitySubdivision": "Concepcion",
+    "municipality": "Baliwag",
+    "countrySecondarySubdivision": "Bulacan",
+    "countrySubdivision": "Central Luzon",
+    "countrySubdivisionName": "Central Luzon",
+    "countrySubdivisionCode": "3",
+    "postalCode": "3006",
+    "countryCode": "PH",
+    "country": "Philippines",
+    "countryCodeISO3": "PHL",
+    "freeformAddress": "Dona Remedios Trinidad Highway, Concepcion, Baliwag, 3006, Bulacan",
+    "localName": "Baliwag"
+   },
+   "position": {
+    "lat": 14.95976,
+    "lon": 120.89091
+   },
+   "viewport": {
+    "topLeftPoint": {
+     "lat": 14.96066,
+     "lon": 120.88998
+    },
+    "btmRightPoint": {
+     "lat": 14.95886,
+     "lon": 120.89184
+    }
+   },
+   "entryPoints": [
+    {
+     "type": "main",
+     "position": {
+      "lat": 14.95986,
+      "lon": 120.89083
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -4,6 +4,8 @@ import '../../../widgets/map_tiles.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../../config/theme.dart';
+import '../../../core/models/place_search.dart';
+import '../../shared/map/place_search_box.dart';
 
 class PickupLocationScreen extends StatefulWidget {
   final String terminalId;
@@ -70,6 +72,19 @@ class _PickupLocationScreenState extends State<PickupLocationScreen> {
     setState(() {
       _selectedLocation = point;
     });
+  }
+
+  /// Moves the map to a searched place and sets it as the pick-up, which the
+  /// passenger can still nudge by tapping.
+  void _useSearchResult(PlaceHit place) {
+    setState(() => _selectedLocation = place.at);
+    _mapController.move(place.at, 17);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Pick-up set to ${place.name}'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   void _confirmLocation() {
@@ -161,32 +176,46 @@ class _PickupLocationScreenState extends State<PickupLocationScreen> {
                   ),
                 ),
 
-                // Instructions
+                // Search, and the instruction under it. Tapping the map
+                // still works; this is for a passenger who knows the name
+                // of the place but not where it sits on the map.
                 Positioned(
                   top: 12,
                   left: 12,
                   right: 12,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.75),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Text(
-                      '📍 Tap anywhere on the map to set your pickup location',
-                      style: TextStyle(color: Colors.white, fontSize: 13),
-                      textAlign: TextAlign.center,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      PlaceSearchBox(
+                        hint: 'Search for your pick-up point',
+                        near: _selectedLocation ?? _baliwagCenter,
+                        onPicked: _useSearchResult,
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.75),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Text(
+                          '📍 Search above, or tap the map to set your pickup '
+                          'location',
+                          style: TextStyle(color: Colors.white, fontSize: 13),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
 
                 // Location unavailable warning
                 if (_locationUnavailable)
                   Positioned(
-                    top: 70,
+                    top: 140,
                     left: 12,
                     right: 12,
                     child: Container(

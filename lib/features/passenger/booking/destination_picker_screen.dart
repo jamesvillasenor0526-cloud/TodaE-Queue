@@ -3,8 +3,10 @@ import 'package:flutter_map/flutter_map.dart';
 import '../../../widgets/map_tiles.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../../config/theme.dart';
+import '../../../../core/models/place_search.dart';
 import '../../../../core/services/fare_service.dart';
 import '../../../../core/services/routing_service.dart';
+import '../../shared/map/place_search_box.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class DestinationPickerScreen extends StatefulWidget {
@@ -27,6 +29,8 @@ class DestinationPickerScreen extends StatefulWidget {
 }
 
 class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
+  /// So a searched place can be brought into view.
+  final MapController _mapController = MapController();
   LatLng? _destination;
   bool _isCalculatingRoute = false;
   double? _routeDistance;
@@ -45,6 +49,19 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
       _routeFare = null;
     });
     _calculateRouteAndFare(point);
+  }
+
+  /// Sets a searched place as the destination and works out the fare to it,
+  /// exactly as tapping the map does.
+  void _useSearchResult(PlaceHit place) {
+    _onMapTapped(TapPosition(Offset.zero, Offset.zero), place.at);
+    _mapController.move(place.at, 16);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Destination set to ${place.name}'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   Future<void> _calculateRouteAndFare(LatLng destination) async {
@@ -171,6 +188,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
       body: Stack(
         children: [
           FlutterMap(
+            mapController: _mapController,
             options: MapOptions(
               initialCenter: pickup,
               initialZoom: 15,
@@ -211,22 +229,33 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                 ),
             ],
           ),
-          // Instructions
+          // Search, then the instruction. Tapping the map still works.
           Positioned(
             top: 12,
             left: 12,
             right: 12,
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.black87,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Text(
-                '📍 Tap the map to set your destination',
-                style: TextStyle(color: Colors.white, fontSize: 13),
-                textAlign: TextAlign.center,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                PlaceSearchBox(
+                  hint: 'Search for your destination',
+                  near: _destination ?? pickup,
+                  onPicked: _useSearchResult,
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Text(
+                    '📍 Search above, or tap the map to set your destination',
+                    style: TextStyle(color: Colors.white, fontSize: 13),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ],
             ),
           ),
           // Fare info + Confirm button at bottom

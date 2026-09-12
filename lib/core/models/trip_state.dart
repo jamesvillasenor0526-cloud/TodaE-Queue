@@ -174,24 +174,24 @@ const Map<TripStatus, Map<TripStatus, Set<TripRole>>> kTripTransitions = {
 };
 
 /// The allowed payment transitions, and who may perform each.
-const Map<PaymentState, Map<PaymentState, Set<TripRole>>>
-kPaymentTransitions = {
-  PaymentState.unpaid: {
-    PaymentState.paymentSubmitted: {TripRole.passenger},
-  },
-  PaymentState.paymentSubmitted: {
-    PaymentState.paymentVerifying: {TripRole.driver},
-  },
-  PaymentState.paymentVerifying: {
-    PaymentState.paymentConfirmed: {TripRole.driver},
-    PaymentState.paymentRejected: {TripRole.driver},
-  },
-  // A rejected payment goes back to the passenger to re-submit.
-  PaymentState.paymentRejected: {
-    PaymentState.paymentSubmitted: {TripRole.passenger},
-  },
-  PaymentState.paymentConfirmed: {},
-};
+const Map<PaymentState, Map<PaymentState, Set<TripRole>>> kPaymentTransitions =
+    {
+      PaymentState.unpaid: {
+        PaymentState.paymentSubmitted: {TripRole.passenger},
+      },
+      PaymentState.paymentSubmitted: {
+        PaymentState.paymentVerifying: {TripRole.driver},
+      },
+      PaymentState.paymentVerifying: {
+        PaymentState.paymentConfirmed: {TripRole.driver},
+        PaymentState.paymentRejected: {TripRole.driver},
+      },
+      // A rejected payment goes back to the passenger to re-submit.
+      PaymentState.paymentRejected: {
+        PaymentState.paymentSubmitted: {TripRole.passenger},
+      },
+      PaymentState.paymentConfirmed: {},
+    };
 
 bool canTransitionTrip(TripStatus from, TripStatus to, TripRole by) =>
     kTripTransitions[from]?[to]?.contains(by) ?? false;
@@ -209,18 +209,25 @@ String? validateTripMove({
   required TripStatus to,
   required PaymentState payment,
   required TripRole by,
+  bool payLater = false,
 }) {
   if (from == to) return null; // already applied; treated as a no-op
   if (!canTransitionTrip(from, to, by)) {
     return 'Can\'t go from "${from.wire}" to "${to.wire}" right now.';
   }
-  // A trip may only start once payment has actually been confirmed.
+  // A trip may only start once payment has been confirmed — unless the
+  // driver has agreed to be paid at the end of the ride, which is how a
+  // tricycle fare is usually settled. Only the driver can agree to that
+  // ([payLater] is their answer, not the passenger's request), because it
+  // is the driver who carries the risk of not being paid.
   if (to == TripStatus.tripInProgress &&
-      payment != PaymentState.paymentConfirmed) {
+      payment != PaymentState.paymentConfirmed &&
+      !payLater) {
     return 'Payment must be confirmed before the trip can start.';
   }
   if (to == TripStatus.readyToStart &&
-      payment != PaymentState.paymentConfirmed) {
+      payment != PaymentState.paymentConfirmed &&
+      !payLater) {
     return 'Confirm the passenger\'s payment first.';
   }
   return null;
@@ -254,6 +261,12 @@ class TripState {
   final String? terminalName;
   final String? receiptNumber;
 
+  /// The passenger has asked to pay at the end of the ride.
+  final bool payAfterRequested;
+
+  /// …and the driver has agreed, which is what lets the trip start unpaid.
+  final bool payAfterAgreed;
+
   const TripState({
     required this.bookingId,
     required this.trip,
@@ -266,6 +279,8 @@ class TripState {
     this.passengerName,
     this.terminalName,
     this.receiptNumber,
+    this.payAfterRequested = false,
+    this.payAfterAgreed = false,
   });
 
   /// Reads a booking document, preferring the new fields and falling back to
@@ -290,6 +305,9 @@ class TripState {
       passengerName: data['passengerName'] as String?,
       terminalName: data['terminalName'] as String?,
       receiptNumber: data['receiptNumber'] as String?,
+      // Only a real true counts, so a stray value never starts a trip unpaid.
+      payAfterRequested: data['payAfterRequested'] == true,
+      payAfterAgreed: data['payAfterAgreed'] == true,
     );
   }
 
@@ -297,6 +315,15 @@ class TripState {
   /// the window in which the passenger is expected to pay.
   bool get awaitingPayment =>
       trip == TripStatus.driverArrived && !payment.isSettled;
+
+  /// The ride is over and the fare is still owed — the driver agreed to be
+  /// paid at the end, or the trip was completed before payment settled.
+  bool get awaitingPaymentAfterRide =>
+      trip == TripStatus.tripCompleted && !payment.isSettled;
+
+  /// The passenger is asking to pay at the end and the driver has not
+  /// answered yet.
+  bool get payAfterPending => payAfterRequested && !payAfterAgreed;
 
   bool get isActive => !trip.isTerminal;
 }

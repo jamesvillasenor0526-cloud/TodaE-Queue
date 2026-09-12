@@ -67,6 +67,7 @@ class TripService {
         to: to,
         payment: current.payment,
         by: by,
+        payLater: current.payAfterAgreed,
       );
       if (refusal != null) throw TripTransitionException(refusal);
 
@@ -143,6 +144,46 @@ class TripService {
     }
 
     await _notifyPayment(to);
+  }
+
+  /// The passenger asks to pay at the end of the ride instead of now.
+  ///
+  /// A request only: the trip stays where it is until the driver answers
+  /// with [answerPayAfter], because it is the driver who would be out of
+  /// pocket if the fare is never paid.
+  Future<void> requestPayAfter(String bookingId) async {
+    await _ref(bookingId).update({
+      'payAfterRequested': true,
+      'payAfterAskedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// The driver's answer to that request.
+  ///
+  /// Agreeing is what lets the trip start unpaid; refusing clears the
+  /// request so the passenger is asked to pay now.
+  Future<void> answerPayAfter(String bookingId, {required bool agreed}) async {
+    await _ref(bookingId).update({
+      'payAfterRequested': agreed,
+      'payAfterAgreed': agreed,
+      'payAfterAnsweredAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    // No notification: these fire on the phone that made the change, so the
+    // passenger would never see it and the driver would see a message meant
+    // for the passenger. Their screen follows this record live regardless.
+  }
+
+  /// The driver gives up on collecting a fare that was to be paid at the
+  /// end. The trip stays finished and unpaid — a record for the admins, not
+  /// a payment — and the driver is free to queue again.
+  Future<void> finishUnpaid(String bookingId) async {
+    await _ref(bookingId).update({
+      'unpaidAtFinish': true,
+      'unpaidAtFinishAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
   }
 
   /// Records which method the passenger intends to use without yet claiming

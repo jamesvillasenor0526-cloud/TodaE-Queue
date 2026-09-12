@@ -2,6 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:toda_equeue_plus/core/models/trip_state.dart';
 
 void main() {
+  _payAfterTests();
+
   group('trip transitions', () {
     test('follows the intended happy path', () {
       expect(
@@ -245,7 +247,6 @@ void main() {
     });
   });
 
-
   group('payment gating (the rules that block a premature trip start)', () {
     test('the trip cannot start while payment is unconfirmed', () {
       for (final p in [
@@ -457,8 +458,11 @@ void main() {
         'status': 'cancelled',
       });
       expect(legacyOnly.trip, TripStatus.driverOnTheWay);
-      expect(legacyOnly.isActive, isTrue,
-          reason: 'this is why cancellation must go through TripService');
+      expect(
+        legacyOnly.isActive,
+        isTrue,
+        reason: 'this is why cancellation must go through TripService',
+      );
     });
 
     test('cancelling through the state machine reads as cancelled', () {
@@ -469,6 +473,115 @@ void main() {
       expect(proper.trip, TripStatus.cancelled);
       expect(proper.isActive, isFalse);
       expect(proper.trip.legacyStatus, 'cancelled');
+    });
+  });
+}
+
+void _payAfterTests() {
+  group('paying after the ride', () {
+    test('a trip cannot start unpaid on the passenger asking alone', () {
+      // The request is not the answer: only the driver's agreement counts.
+      expect(
+        validateTripMove(
+          from: TripStatus.driverArrived,
+          to: TripStatus.readyToStart,
+          payment: PaymentState.unpaid,
+          by: TripRole.driver,
+        ),
+        isNotNull,
+      );
+    });
+
+    test('the driver agreeing lets an unpaid trip start', () {
+      expect(
+        validateTripMove(
+          from: TripStatus.driverArrived,
+          to: TripStatus.readyToStart,
+          payment: PaymentState.unpaid,
+          by: TripRole.driver,
+          payLater: true,
+        ),
+        isNull,
+      );
+      expect(
+        validateTripMove(
+          from: TripStatus.readyToStart,
+          to: TripStatus.tripInProgress,
+          payment: PaymentState.unpaid,
+          by: TripRole.driver,
+          payLater: true,
+        ),
+        isNull,
+      );
+    });
+
+    test('agreeing does not open any other door', () {
+      // Still the driver's move, still in order.
+      expect(
+        validateTripMove(
+          from: TripStatus.driverArrived,
+          to: TripStatus.tripInProgress,
+          payment: PaymentState.unpaid,
+          by: TripRole.driver,
+          payLater: true,
+        ),
+        isNotNull,
+      );
+      expect(
+        validateTripMove(
+          from: TripStatus.readyToStart,
+          to: TripStatus.tripInProgress,
+          payment: PaymentState.unpaid,
+          by: TripRole.passenger,
+          payLater: true,
+        ),
+        isNotNull,
+      );
+    });
+
+    test('the record says who asked and who agreed', () {
+      final asked = TripState.fromMap('b1', {
+        'tripStatus': 'DRIVER_ARRIVED',
+        'payAfterRequested': true,
+      });
+      expect(asked.payAfterPending, isTrue);
+      expect(asked.payAfterAgreed, isFalse);
+
+      final agreed = TripState.fromMap('b1', {
+        'tripStatus': 'DRIVER_ARRIVED',
+        'payAfterRequested': true,
+        'payAfterAgreed': true,
+      });
+      expect(agreed.payAfterPending, isFalse);
+      expect(agreed.payAfterAgreed, isTrue);
+    });
+
+    test('only a real true counts as agreement', () {
+      final sneaky = TripState.fromMap('b1', {
+        'tripStatus': 'DRIVER_ARRIVED',
+        'payAfterAgreed': 'yes',
+      });
+      expect(sneaky.payAfterAgreed, isFalse);
+    });
+
+    test('an old trip knows nothing of paying later', () {
+      final old = TripState.fromMap('b1', {'status': 'accepted'});
+      expect(old.payAfterRequested, isFalse);
+      expect(old.payAfterAgreed, isFalse);
+    });
+
+    test('a finished trip that is still unpaid is waiting for the fare', () {
+      final done = TripState.fromMap('b1', {
+        'tripStatus': 'TRIP_COMPLETED',
+        'paymentState': 'UNPAID',
+      });
+      expect(done.awaitingPaymentAfterRide, isTrue);
+
+      final paid = TripState.fromMap('b1', {
+        'tripStatus': 'TRIP_COMPLETED',
+        'paymentState': 'PAYMENT_CONFIRMED',
+      });
+      expect(paid.awaitingPaymentAfterRide, isFalse);
     });
   });
 }

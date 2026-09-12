@@ -44,8 +44,10 @@ class _TripStatusCardState extends State<TripStatusCard> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Couldn\'t save that. Check your connection and '
-                'try again.'),
+            content: Text(
+              'Couldn\'t save that. Check your connection and '
+              'try again.',
+            ),
           ),
         );
       }
@@ -93,9 +95,9 @@ class _TripStatusCardState extends State<TripStatusCard> {
                   Expanded(
                     child: Text(
                       _headline(s),
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: _accent(s),
-                      ),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.titleMedium?.copyWith(color: _accent(s)),
                     ),
                   ),
                 ],
@@ -118,6 +120,10 @@ class _TripStatusCardState extends State<TripStatusCard> {
   // ── state → copy ──────────────────────────────────────────────────────
 
   String _headline(TripState s) {
+    if (s.awaitingPaymentAfterRide) return 'Pay your driver';
+    if (s.trip == TripStatus.driverArrived && s.payAfterAgreed) {
+      return 'Pay at the end of the ride';
+    }
     if (s.trip == TripStatus.driverArrived && !s.payment.isSettled) {
       return switch (s.payment) {
         PaymentState.unpaid => 'Your driver has arrived',
@@ -132,6 +138,22 @@ class _TripStatusCardState extends State<TripStatusCard> {
   }
 
   String? _subtitle(TripState s) {
+    if (s.awaitingPaymentAfterRide) {
+      return switch (s.payment) {
+        PaymentState.paymentSubmitted =>
+          'Waiting for ${s.driverName ?? 'your driver'} to check it.',
+        PaymentState.paymentVerifying =>
+          'Your driver is checking the payment. Please wait…',
+        PaymentState.paymentRejected => s.payment.passengerLabel,
+        _ =>
+          'Your ride is finished. Pay '
+              '${FareService.instance.formatFare(s.fare)} now.',
+      };
+    }
+    if (s.trip == TripStatus.driverArrived && s.payAfterAgreed) {
+      return '${s.driverName ?? 'Your driver'} agreed. Pay '
+          '${FareService.instance.formatFare(s.fare)} when you arrive.';
+    }
     if (s.trip == TripStatus.driverArrived && !s.payment.isSettled) {
       return switch (s.payment) {
         PaymentState.unpaid =>
@@ -151,9 +173,10 @@ class _TripStatusCardState extends State<TripStatusCard> {
       TripStatus.driverOnTheWay => 'Watch the map to follow their approach.',
       TripStatus.readyToStart => 'Your driver will start the trip shortly.',
       TripStatus.tripInProgress => 'Enjoy your ride.',
-      TripStatus.tripCompleted => s.receiptNumber != null
-          ? 'Receipt ${s.receiptNumber}'
-          : 'Thanks for riding with us.',
+      TripStatus.tripCompleted =>
+        s.receiptNumber != null
+            ? 'Receipt ${s.receiptNumber}'
+            : 'Thanks for riding with us.',
       TripStatus.cancelled => 'This trip is no longer active.',
       _ => null,
     };
@@ -162,12 +185,27 @@ class _TripStatusCardState extends State<TripStatusCard> {
   // ── state → actions ───────────────────────────────────────────────────
 
   List<Widget> _actionsFor(TripState s) {
+    // Payable before the ride, as before — and now after it too, for a trip
+    // the driver agreed to be paid for at the end.
     final payable =
-        s.trip == TripStatus.driverArrived &&
+        (s.trip == TripStatus.driverArrived ||
+            s.trip == TripStatus.tripCompleted) &&
         (s.payment == PaymentState.unpaid ||
             s.payment == PaymentState.paymentRejected);
 
     if (!payable) return const [];
+
+    // Waiting on the driver's answer to "pay after the ride": no buttons,
+    // so the passenger cannot ask twice or pay while the ask is open.
+    if (s.payAfterPending && s.trip == TripStatus.driverArrived) {
+      return const [
+        SizedBox(height: AppSpacing.md),
+        Text(
+          'Asked your driver if you can pay at the end of the ride…',
+          style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+        ),
+      ];
+    }
 
     return [
       const SizedBox(height: AppSpacing.md),
@@ -207,6 +245,19 @@ class _TripStatusCardState extends State<TripStatusCard> {
           ),
         ],
       ),
+      // Only before the ride: afterwards there is nothing left to put off.
+      if (s.trip == TripStatus.driverArrived && !s.payAfterAgreed) ...[
+        const SizedBox(height: AppSpacing.sm),
+        TextButton.icon(
+          onPressed: _busy
+              ? null
+              : () => _run(
+                  () => TripService.instance.requestPayAfter(widget.bookingId),
+                ),
+          icon: const Icon(Icons.schedule, size: 18),
+          label: const Text('Ask to pay after the ride'),
+        ),
+      ],
     ];
   }
 

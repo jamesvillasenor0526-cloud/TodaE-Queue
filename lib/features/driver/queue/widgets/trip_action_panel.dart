@@ -44,8 +44,10 @@ class _TripActionPanelState extends State<TripActionPanel> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Couldn\'t save that. Check your connection and '
-                'try again.'),
+            content: Text(
+              'Couldn\'t save that. Check your connection and '
+              'try again.',
+            ),
           ),
         );
       }
@@ -68,7 +70,14 @@ class _TripActionPanelState extends State<TripActionPanel> {
 
         final state = snapshot.data!;
 
-        if (state.trip.isTerminal && !_finishedNotified) {
+        // A finished trip only clears the driver's screen once there is
+        // nothing left to do on it. For a fare to be paid at the end, that
+        // means after the money is in: otherwise the trip disappeared the
+        // moment it was completed, taking the payment step with it.
+        final nothingLeft =
+            state.trip == TripStatus.cancelled ||
+            (state.trip.isTerminal && state.payment.isSettled);
+        if (nothingLeft && !_finishedNotified) {
           _finishedNotified = true;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) widget.onTripFinished?.call();
@@ -88,11 +97,66 @@ class _TripActionPanelState extends State<TripActionPanel> {
   }
 
   List<Widget> _actionsFor(TripState s) {
-    // Payment takes precedence once the driver is with the passenger: the
-    // trip cannot move on until it is settled.
-    if (s.trip == TripStatus.driverArrived) {
+    // Payment takes precedence once the driver is with the passenger — and
+    // once the ride is over, for a fare the driver agreed to collect at the
+    // end.
+    if (s.trip == TripStatus.driverArrived ||
+        (s.trip == TripStatus.tripCompleted && !s.payment.isSettled)) {
       switch (s.payment) {
         case PaymentState.unpaid:
+          // The passenger has asked to pay at the end. The driver decides:
+          // it is their fare at risk.
+          if (s.payAfterPending) {
+            return [
+              _waitingNote(
+                'The passenger asks to pay '
+                '₱${s.fare.toStringAsFixed(0)} at the end of the ride.',
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              _primary(
+                icon: Icons.play_circle_outline,
+                label: 'Start now, pay after',
+                onPressed: () => _run(
+                  () => TripService.instance.answerPayAfter(
+                    widget.bookingId,
+                    agreed: true,
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              _secondary(
+                icon: Icons.payments_outlined,
+                label: 'Ask for payment now',
+                onPressed: () => _run(
+                  () => TripService.instance.answerPayAfter(
+                    widget.bookingId,
+                    agreed: false,
+                  ),
+                ),
+              ),
+            ];
+          }
+          // Agreed to be paid at the end: nothing to wait for here, the
+          // trip switch below offers Start Trip.
+          if (s.payAfterAgreed && s.trip == TripStatus.driverArrived) break;
+          if (s.trip == TripStatus.tripCompleted) {
+            return [
+              _waitingNote(
+                'The ride is over. Waiting for the passenger to pay '
+                '₱${s.fare.toStringAsFixed(0)}.',
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              // A way out: without it a passenger who walks off without
+              // paying would leave the driver stuck on this trip, unable to
+              // check in again.
+              _secondary(
+                icon: Icons.logout,
+                label: 'Finish without payment',
+                danger: true,
+                onPressed: _confirmFinishUnpaid,
+              ),
+            ];
+          }
           return [
             _waitingNote(
               'Waiting for the passenger to pay ₱${s.fare.toStringAsFixed(0)}.',
@@ -140,9 +204,7 @@ class _TripActionPanelState extends State<TripActionPanel> {
             ),
           ];
         case PaymentState.paymentRejected:
-          return [
-            _waitingNote('Waiting for the passenger to pay again.'),
-          ];
+          return [_waitingNote('Waiting for the passenger to pay again.')];
         case PaymentState.paymentConfirmed:
           break; // handled by the trip-status switch below
       }
@@ -232,6 +294,38 @@ class _TripActionPanelState extends State<TripActionPanel> {
       case TripStatus.cancelled:
         return [_waitingNote(s.trip.driverLabel)];
     }
+  }
+
+  /// Closes a finished trip whose fare was never paid, so the driver can get
+  /// back in the queue. The trip stays on record as unpaid for the admins.
+  Future<void> _confirmFinishUnpaid() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Finish without payment?'),
+        content: const Text(
+          'The trip stays on record as unpaid, and your TODA admin can see '
+          'it. Only do this if the passenger has left without paying.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep waiting'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.errorRed),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Finish unpaid',
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await _run(() => TripService.instance.finishUnpaid(widget.bookingId));
+    if (mounted) widget.onTripFinished?.call();
   }
 
   Future<void> _confirmComplete() async {

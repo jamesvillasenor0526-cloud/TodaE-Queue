@@ -167,14 +167,9 @@ class _PickupLocationScreenState extends State<PickupLocationScreen> {
                   ],
                 ),
 
-                // Center crosshair
-                const Center(
-                  child: Icon(
-                    Icons.add_location,
-                    color: AppTheme.errorRed,
-                    size: 40,
-                  ),
-                ),
+                // No crosshair at the centre of the screen: it stayed put
+                // while the map moved and marked nothing, so next to the
+                // real pin it read as a second pickup point.
 
                 // Search, and the instruction under it. Tapping the map
                 // still works; this is for a passenger who knows the name

@@ -234,7 +234,10 @@ class _HomeTabState extends State<_HomeTab> {
                 stream: FirebaseFirestore.instance
                     .collection('bookings')
                     .where('passengerId', isEqualTo: uid)
-                    .where('status', whereIn: ['assigned', 'accepted', 'completed'])
+                    .where(
+                      'status',
+                      whereIn: ['assigned', 'accepted', 'completed'],
+                    )
                     .snapshots(),
                 builder: (context, snapshot) {
                   if (snapshot.hasError) {
@@ -775,6 +778,9 @@ class _HomeTabState extends State<_HomeTab> {
           destinationLng: destinationLng,
           distance: distance,
           fare: fare,
+          outsideServiceArea: bookingData['outsideServiceArea'] == true,
+          outOfTownFee: (bookingData['outOfTownFee'] as num?)?.toDouble() ?? 0,
+          outOfTownKm: (bookingData['outOfTownKm'] as num?)?.toDouble() ?? 0,
         ),
       ),
     );
@@ -802,11 +808,11 @@ class _HomeTabState extends State<_HomeTab> {
                     .doc(result.driverId)
                     .get(),
                 builder: (context, driverSnap) {
-                  final gcashQrUrl =
-                      driverSnap.data?.data() != null
-                          ? (driverSnap.data!.data() as Map<String, dynamic>)['gcashQrUrl']
-                                as String?
-                          : null;
+                  final gcashQrUrl = driverSnap.data?.data() != null
+                      ? (driverSnap.data!.data()
+                                as Map<String, dynamic>)['gcashQrUrl']
+                            as String?
+                      : null;
                   if (gcashQrUrl == null) {
                     return const SizedBox.shrink();
                   }
@@ -816,7 +822,10 @@ class _HomeTabState extends State<_HomeTab> {
                       const Divider(height: 24),
                       const Text(
                         'Scan GCash QR to pay:',
-                        style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.textMuted,
+                        ),
                       ),
                       const SizedBox(height: 8),
                       Image.network(
@@ -1058,6 +1067,12 @@ class _TerminalSheetScreen extends StatefulWidget {
   final double distance;
   final double fare;
 
+  /// Set when where they are going lies outside Baliwag far enough from the
+  /// terminal to be charged for the driver's return.
+  final double outOfTownFee;
+  final double outOfTownKm;
+  final bool outsideServiceArea;
+
   const _TerminalSheetScreen({
     required this.terminalName,
     required this.terminalId,
@@ -1067,6 +1082,9 @@ class _TerminalSheetScreen extends StatefulWidget {
     required this.destinationLng,
     required this.distance,
     required this.fare,
+    this.outOfTownFee = 0,
+    this.outOfTownKm = 0,
+    this.outsideServiceArea = false,
   });
 
   @override
@@ -1109,6 +1127,9 @@ class _TerminalSheetScreenState extends State<_TerminalSheetScreen> {
       destinationLongitude: widget.destinationLng,
       distance: widget.distance,
       fare: widget.fare,
+      outsideServiceArea: widget.outsideServiceArea,
+      outOfTownFee: widget.outOfTownFee,
+      outOfTownKm: widget.outOfTownKm,
     );
     if (!mounted) return;
     Navigator.pop(context, result);
@@ -1184,24 +1205,59 @@ class _TerminalSheetScreenState extends State<_TerminalSheetScreen> {
               color: AppTheme.primaryGreen.withValues(alpha: 0.05),
               child: Padding(
                 padding: const EdgeInsets.all(20),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text(
-                      '💰 Total Fare',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          '💰 Total Fare',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          FareService.instance.formatFare(widget.fare),
+                          style: const TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.primaryGreen,
+                          ),
+                        ),
+                      ],
                     ),
-                    Text(
-                      FareService.instance.formatFare(widget.fare),
-                      style: const TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.primaryGreen,
+                    // Out-of-town trips cost more and can be turned down, so
+                    // say both before they book.
+                    if (widget.outOfTownFee > 0) ...[
+                      const SizedBox(height: 10),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Includes ₱${widget.outOfTownFee.toStringAsFixed(0)} '
+                              'for ${widget.outOfTownKm.toStringAsFixed(1)} km '
+                              'outside Baliwag',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppTheme.textMuted,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'The driver has to accept this trip before they come '
+                        'for you.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.textMuted,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1238,7 +1294,9 @@ class _TerminalSheetScreenState extends State<_TerminalSheetScreen> {
                             ? '$count driver(s) available'
                             : 'No drivers available right now',
                         style: TextStyle(
-                          color: count > 0 ? AppTheme.success : AppTheme.warning,
+                          color: count > 0
+                              ? AppTheme.success
+                              : AppTheme.warning,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -1351,8 +1409,10 @@ class _HistoryTabState extends State<_HistoryTab> {
           itemCount: bookings.length,
           itemBuilder: (context, index) {
             final data = bookings[index].data() as Map<String, dynamic>;
-            final status =
-                TripState.fromMap(bookings[index].id, data).trip.passengerLabel;
+            final status = TripState.fromMap(
+              bookings[index].id,
+              data,
+            ).trip.passengerLabel;
             return Card(
               margin: const EdgeInsets.only(bottom: 12),
               shape: RoundedRectangleBorder(
@@ -2383,7 +2443,10 @@ class _ProfileTabState extends State<_ProfileTab> {
                 borderRadius: BorderRadius.circular(12),
               ),
               child: ListTile(
-                leading: const Icon(Icons.flag_outlined, color: AppTheme.warning),
+                leading: const Icon(
+                  Icons.flag_outlined,
+                  color: AppTheme.warning,
+                ),
                 title: const Text(
                   'My road reports',
                   style: TextStyle(fontWeight: FontWeight.bold),
@@ -2471,8 +2534,7 @@ class _ProfileTabState extends State<_ProfileTab> {
                     title: const Text('About App'),
                     subtitle: const Text('TODA E-QUEUE+ v1.0.0'),
                     trailing: const Icon(Icons.chevron_right),
-                    onTap: () =>
-                        Navigator.pushNamed(context, AppRoutes.about),
+                    onTap: () => Navigator.pushNamed(context, AppRoutes.about),
                   ),
                 ],
               ),
@@ -2488,7 +2550,10 @@ class _ProfileTabState extends State<_ProfileTab> {
               child: Column(
                 children: [
                   ListTile(
-                    leading: const Icon(Icons.bug_report, color: AppTheme.warning),
+                    leading: const Icon(
+                      Icons.bug_report,
+                      color: AppTheme.warning,
+                    ),
                     title: const Text('Send Ticket / Report Issue'),
                     trailing: const Icon(Icons.chevron_right, size: 18),
                     onTap: () =>

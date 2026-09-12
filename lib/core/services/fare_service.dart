@@ -13,6 +13,20 @@ class FareService {
     return calculateFareFromDistance(distanceInKm);
   }
 
+  /// What an out-of-town trip adds: the kilometres beyond the town boundary
+  /// charged a second time, for the driver's empty return. Those kilometres
+  /// are already in the trip's distance, so adding [ratePerKm] once more
+  /// makes them double rate.
+  double outOfTownExtra(double kmOutside) {
+    if (kmOutside <= 0) return 0;
+    return double.parse((kmOutside * ratePerKm).toStringAsFixed(2));
+  }
+
+  /// The whole fare for a trip of [distanceInKm], of which [kmOutside] lies
+  /// beyond the town boundary.
+  double fareWithReturn({required double distanceInKm, double kmOutside = 0}) =>
+      calculateFareFromDistance(distanceInKm) + outOfTownExtra(kmOutside);
+
   double calculateFareFromDistance(double distanceInKm) {
     if (distanceInKm <= 1.0) {
       return minimumFare;

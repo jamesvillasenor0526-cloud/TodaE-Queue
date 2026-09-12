@@ -14,13 +14,15 @@ const terminal = [
 ];
 
 /// [meters] north of the terminal's northern edge.
-LatLng north(double meters) =>
-    LatLng(14.9544 + meters / 111320.0, 120.9012);
+LatLng north(double meters) => LatLng(14.9544 + meters / 111320.0, 120.9012);
 
 void main() {
   group('how far outside the terminal', () {
     test('inside is zero', () {
-      expect(metersOutsideBoundary(const LatLng(14.9542, 120.9012), terminal), 0);
+      expect(
+        metersOutsideBoundary(const LatLng(14.9542, 120.9012), terminal),
+        0,
+      );
     });
 
     test('just outside is a few metres, not a jump', () {
@@ -65,6 +67,39 @@ void main() {
       expect(waitedLongEnoughToReassign(const Duration(seconds: 89)), isFalse);
       expect(waitedLongEnoughToReassign(kAcceptWindow), isTrue);
       expect(waitedLongEnoughToReassign(const Duration(minutes: 5)), isTrue);
+    });
+  });
+
+  group('who is offered a trip that has been refused', () {
+    // Drivers in queue order, front first.
+    const queue = ['mang-tony', 'boy', 'jun'];
+    String idOf(String d) => d;
+
+    test('the front of the queue, when nobody has refused', () {
+      expect(firstNotDeclined(queue, const {}, idOf), 'mang-tony');
+    });
+
+    test('the next one, when the front has refused', () {
+      expect(firstNotDeclined(queue, const {'mang-tony'}, idOf), 'boy');
+    });
+
+    test('never someone who already said no', () {
+      expect(firstNotDeclined(queue, const {'mang-tony', 'boy'}, idOf), 'jun');
+    });
+
+    test('nobody, when everyone waiting has refused', () {
+      expect(
+        firstNotDeclined(queue, const {'mang-tony', 'boy', 'jun'}, idOf),
+        isNull,
+      );
+    });
+
+    test('nobody, when the terminal is empty', () {
+      expect(firstNotDeclined(const <String>[], const {'boy'}, idOf), isNull);
+    });
+
+    test('queue order is kept, not the order they refused in', () {
+      expect(firstNotDeclined(queue, const {'boy'}, idOf), 'mang-tony');
     });
   });
 }

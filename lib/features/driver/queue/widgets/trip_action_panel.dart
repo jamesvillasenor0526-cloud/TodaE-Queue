@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../../config/theme.dart';
 import '../../../../core/models/trip_state.dart';
+import '../../../../core/services/dispatch_service.dart';
 import '../../../../core/services/trip_service.dart';
 
 /// The driver's single source of actions for an active trip.
@@ -213,9 +214,18 @@ class _TripActionPanelState extends State<TripActionPanel> {
     switch (s.trip) {
       case TripStatus.requested:
         return [
+          // A trip that leaves Baliwag is the driver's to refuse: it is a
+          // long way back empty, even with the return charge. Saying no
+          // keeps their place in the queue.
+          if (s.outsideServiceArea) ...[
+            _OutOfTownNotice(state: s),
+            const SizedBox(height: AppSpacing.md),
+          ],
           _primary(
             icon: Icons.check_circle_outline,
-            label: 'Accept Ride',
+            label: s.outsideServiceArea
+                ? 'Accept out-of-town trip'
+                : 'Accept Ride',
             onPressed: () => _run(
               () => TripService.instance.moveTrip(
                 bookingId: widget.bookingId,
@@ -224,6 +234,14 @@ class _TripActionPanelState extends State<TripActionPanel> {
               ),
             ),
           ),
+          if (s.outsideServiceArea) ...[
+            const SizedBox(height: AppSpacing.sm),
+            _secondary(
+              icon: Icons.do_not_disturb_on_outlined,
+              label: 'Decline — too far',
+              onPressed: _confirmDeclineOutOfTown,
+            ),
+          ],
         ];
       case TripStatus.driverAccepted:
         return [
@@ -298,6 +316,52 @@ class _TripActionPanelState extends State<TripActionPanel> {
 
   /// Closes a finished trip whose fare was never paid, so the driver can get
   /// back in the queue. The trip stays on record as unpaid for the admins.
+  Future<void> _confirmDeclineOutOfTown() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Decline this trip?'),
+        content: const Text(
+          'You keep your place in the queue, and the passenger is offered '
+          'the next driver. You will not be offered this trip again.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Go back'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.errorRed),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Decline', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    await _run(() async {
+      final result = await DispatchService.instance.declineOutOfTown(
+        widget.bookingId,
+      );
+      if (!mounted) return;
+      if (!result.success) {
+        // The trip is declined regardless; this only says the passenger is
+        // now without a driver.
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result.message ?? 'The passenger is waiting for another driver.',
+            ),
+          ),
+        );
+      }
+    });
+    // Declining ends this trip for this driver either way: the booking is
+    // cancelled, so the panel has nothing left to show.
+    if (mounted) widget.onTripFinished?.call();
+  }
+
   Future<void> _confirmFinishUnpaid() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -413,6 +477,57 @@ class _TripActionPanelState extends State<TripActionPanel> {
 
 /// Shows the current trip and payment state together, so the driver always
 /// knows where things stand without guessing from the button label.
+/// Tells the driver a trip leaves Baliwag, and what the fare already
+/// includes for it, before they accept.
+class _OutOfTownNotice extends StatelessWidget {
+  final TripState state;
+  const _OutOfTownNotice({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    final fee = state.outOfTownFee;
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppTheme.warning.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.warning.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.south_east, size: 18, color: AppTheme.warning),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'This trip leaves Baliwag',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  fee > 0
+                      ? 'The ₱${state.fare.toStringAsFixed(0)} fare includes '
+                            '₱${fee.toStringAsFixed(0)} for the '
+                            '${state.outOfTownKm.toStringAsFixed(1)} km '
+                            'outside town, so your return is paid for. You '
+                            'can decline without losing your place.'
+                      : 'Just past the town line, close to the terminal — '
+                            'charged as a normal trip. You can still '
+                            'decline without losing your place.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _StatusLine extends StatelessWidget {
   final TripState state;
   const _StatusLine({required this.state});

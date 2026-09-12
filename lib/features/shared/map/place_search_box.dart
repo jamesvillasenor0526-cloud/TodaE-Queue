@@ -18,6 +18,7 @@ import 'package:latlong2/latlong.dart';
 import '../../../config/theme.dart';
 import '../../../core/models/place_search.dart';
 import '../../../core/services/geocoding_service.dart';
+import '../../../core/services/service_area_service.dart';
 
 /// How long after the last keystroke the search runs.
 const Duration kSearchPause = Duration(milliseconds: 600);
@@ -50,6 +51,17 @@ class _PlaceSearchBoxState extends State<PlaceSearchBox> {
   List<PlaceHit> _results = const [];
   bool _searching = false;
   bool _searched = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // So results can be marked as outside the town. Reading the bundled
+    // outline happens once for the whole app; if it fails, results are just
+    // unmarked.
+    ServiceAreaService.instance.load().then((_) {
+      if (mounted) setState(() {});
+    });
+  }
 
   @override
   void dispose() {
@@ -158,11 +170,15 @@ class _PlaceSearchBoxState extends State<PlaceSearchBox> {
                 separatorBuilder: (_, _) => const Divider(height: 1),
                 itemBuilder: (context, i) {
                   final place = _results[i];
+                  // Places beyond the town are still offered, but said to be
+                  // beyond it: the fare may include the driver's return.
+                  final area = ServiceAreaService.instance.area;
+                  final outside = area.isUsable && !area.contains(place.at);
                   return ListTile(
                     dense: true,
-                    leading: const Icon(
-                      Icons.place_outlined,
-                      color: AppTheme.primaryGreen,
+                    leading: Icon(
+                      outside ? Icons.south_east : Icons.place_outlined,
+                      color: outside ? AppTheme.warning : AppTheme.primaryGreen,
                     ),
                     title: Text(
                       place.name,
@@ -170,7 +186,16 @@ class _PlaceSearchBoxState extends State<PlaceSearchBox> {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
-                    subtitle: place.where.isEmpty
+                    subtitle: outside
+                        ? Text(
+                            place.where.isEmpty
+                                ? 'Outside ${area.name}'
+                                : '${place.where} · outside ${area.name}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: AppTheme.warning),
+                          )
+                        : place.where.isEmpty
                         ? null
                         : Text(
                             place.where,

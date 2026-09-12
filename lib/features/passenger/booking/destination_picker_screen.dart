@@ -4,8 +4,10 @@ import '../../../widgets/map_tiles.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../../config/theme.dart';
 import '../../../../core/models/place_search.dart';
+import '../../../../core/models/service_area.dart';
 import '../../../../core/services/fare_service.dart';
 import '../../../../core/services/routing_service.dart';
+import '../../../../core/services/service_area_service.dart';
 import '../../shared/map/place_search_box.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -42,11 +44,28 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
   /// out from the straight line instead, so the fare can say so.
   bool _distanceMeasured = true;
 
+  /// Whether where they are going lies outside Baliwag, and what it adds.
+  OutOfTown _outOfTown = OutOfTown.none;
+
+  @override
+  void initState() {
+    super.initState();
+    // The town outline is a bundled asset; reading it is quick and only
+    // happens once. Until it arrives, nothing counts as out of town.
+    ServiceAreaService.instance.load().then((_) {
+      if (!mounted) return;
+      setState(() {}); // draws the town line
+      final destination = _destination;
+      if (destination != null) _calculateRouteAndFare(destination);
+    });
+  }
+
   void _onMapTapped(TapPosition tapPosition, LatLng point) {
     setState(() {
       _destination = point;
       _routeDistance = null;
       _routeFare = null;
+      _outOfTown = OutOfTown.none;
     });
     _calculateRouteAndFare(point);
   }
@@ -98,14 +117,24 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
       // Total distance
       final totalDistance =
           terminalToPickupDistance + pickupToDestinationDistance;
-      final fare = FareService.instance.calculateFareFromDistance(
-        totalDistance,
+
+      // Outside Baliwag, the driver comes back empty, so the kilometres past
+      // the town line are charged again — unless the destination is close
+      // enough to the terminal to be an ordinary short trip.
+      final outOfTown = ServiceAreaService.instance.check(
+        destination: destination,
+        terminal: terminalPoint,
+      );
+      final fare = FareService.instance.fareWithReturn(
+        distanceInKm: totalDistance,
+        kmOutside: outOfTown.charged ? outOfTown.kmOutside : 0,
       );
 
       if (mounted) {
         setState(() {
           _routeDistance = totalDistance;
           _routeFare = fare;
+          _outOfTown = outOfTown;
           _terminalToPickupDistance = terminalToPickupDistance; // ← ADD
           _pickupToDestinationDistance = pickupToDestinationDistance; // ← ADD
         });
@@ -129,7 +158,11 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
         _routeDistance ??
         await RoutingService.instance.getRouteDistance(pickup, _destination!);
     final fare =
-        _routeFare ?? FareService.instance.calculateFareFromDistance(distance);
+        _routeFare ??
+        FareService.instance.fareWithReturn(
+          distanceInKm: distance,
+          kmOutside: _outOfTown.charged ? _outOfTown.kmOutside : 0,
+        );
 
     if (!mounted) return;
 
@@ -142,6 +175,13 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
       'destinationLng': _destination!.longitude,
       'distance': distance,
       'fare': fare,
+      // Carried on to the booking so the driver sees why the fare is higher
+      // and can say no to the trip.
+      'outsideServiceArea': _outOfTown.outside,
+      'outOfTownFee': _outOfTown.charged
+          ? FareService.instance.outOfTownExtra(_outOfTown.kmOutside)
+          : 0.0,
+      'outOfTownKm': _outOfTown.charged ? _outOfTown.kmOutside : 0.0,
     });
   }
 
@@ -181,7 +221,13 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
             : 0);
     final displayFare =
         _routeFare ??
-        FareService.instance.calculateFareFromDistance(displayDistance);
+        FareService.instance.fareWithReturn(
+          distanceInKm: displayDistance.toDouble(),
+          kmOutside: _outOfTown.charged ? _outOfTown.kmOutside : 0,
+        );
+    final outOfTownFee = _outOfTown.charged
+        ? FareService.instance.outOfTownExtra(_outOfTown.kmOutside)
+        : 0.0;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Select Destination')),
@@ -196,6 +242,20 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
             ),
             children: [
               AppTileLayer(),
+              // The town line, so it is clear where the ordinary fare ends.
+              if (ServiceAreaService.instance.area.isUsable)
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: [
+                        ...ServiceAreaService.instance.area.outline,
+                        ServiceAreaService.instance.area.outline.first,
+                      ],
+                      color: AppTheme.primaryGreen.withValues(alpha: 0.5),
+                      strokeWidth: 2,
+                    ),
+                  ],
+                ),
               MarkerLayer(
                 markers: [
                   Marker(
@@ -350,6 +410,32 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                         ),
                       ],
                     ),
+                    if (outOfTownFee > 0) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '🚏 Outside Baliwag '
+                              '(${_outOfTown.kmOutside.toStringAsFixed(1)} km)',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                color: AppTheme.textMuted,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            '+${FareService.instance.formatFare(outOfTownFee)}',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                              color: AppTheme.errorRed,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -383,12 +469,39 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                           ),
                         ),
                       ),
+                    if (outOfTownFee > 0)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 6),
+                        child: Text(
+                          'This trip leaves Baliwag. The driver returns '
+                          'empty, so the distance outside town is charged '
+                          'twice — and a driver has to accept the trip '
+                          'first.',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppTheme.textMuted,
+                          ),
+                        ),
+                      )
+                    else if (_outOfTown.outside)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 6),
+                        child: Text(
+                          'Just outside Baliwag, but close to the terminal — '
+                          'charged as a normal trip.',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppTheme.textMuted,
+                          ),
+                        ),
+                      ),
                     const SizedBox(height: 16),
                     TextButton.icon(
                       onPressed: () => setState(() {
                         _destination = null;
                         _routeDistance = null;
                         _routeFare = null;
+                        _outOfTown = OutOfTown.none;
                         _distanceMeasured = true;
                         _terminalToPickupDistance = null; // ← ADD
                         _pickupToDestinationDistance = null; // ← ADD

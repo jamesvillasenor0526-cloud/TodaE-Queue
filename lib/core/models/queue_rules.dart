@@ -15,9 +15,9 @@
 /// Pure, so the thresholds are tested without a device or a network.
 library;
 
-import 'package:latlong2/latlong.dart';
-
-import 'traffic_segment.dart' show nearestOnWay;
+// The geometry lives with the other boundary work; the terminal rules below
+// are what this file is for.
+export 'boundary.dart' show metersOutsideBoundary;
 
 /// How far outside the terminal's boundary counts as having left it.
 ///
@@ -33,38 +33,29 @@ const int kQueueExitFixes = 3;
 /// offered another driver.
 const Duration kAcceptWindow = Duration(seconds: 90);
 
-/// How far [point] lies outside [boundary]; zero when inside it.
-///
-/// Measured to the boundary itself rather than its centre, so terminals of
-/// different sizes all get the same margin.
-double metersOutsideBoundary(LatLng point, List<LatLng> boundary) {
-  if (boundary.length < 3) return 0; // no usable boundary: never eject
-  if (_inside(point, boundary)) return 0;
-  final ring = [...boundary, boundary.first];
-  return nearestOnWay(ring, point)?.distanceMeters ?? 0;
-}
-
 /// Whether a waiting driver has left the terminal for good.
 bool leavesQueue({
   required double metersOutside,
   required int consecutiveOutside,
-}) =>
-    metersOutside > kQueueExitMeters && consecutiveOutside >= kQueueExitFixes;
+}) => metersOutside > kQueueExitMeters && consecutiveOutside >= kQueueExitFixes;
 
 /// Whether a dispatched driver has had long enough to answer.
 bool waitedLongEnoughToReassign(Duration sinceDispatch) =>
     sinceDispatch >= kAcceptWindow;
 
-/// Ray casting, the same test the geofence uses.
-bool _inside(LatLng p, List<LatLng> polygon) {
-  var inside = false;
-  for (var i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    final xi = polygon[i].longitude, yi = polygon[i].latitude;
-    final xj = polygon[j].longitude, yj = polygon[j].latitude;
-    final crosses =
-        ((yi > p.latitude) != (yj > p.latitude)) &&
-        (p.longitude < (xj - xi) * (p.latitude - yi) / (yj - yi) + xi);
-    if (crosses) inside = !inside;
+/// The first driver in queue order who has not already refused this trip.
+///
+/// Refusing an out-of-town trip is a driver's right and costs them nothing,
+/// but the passenger must not be handed straight back to them: without this,
+/// the same driver at the front of the queue would be offered the trip again
+/// and again. Returns null when everyone waiting has refused.
+T? firstNotDeclined<T>(
+  Iterable<T> queueInOrder,
+  Set<String> declinedBy,
+  String Function(T) driverIdOf,
+) {
+  for (final entry in queueInOrder) {
+    if (!declinedBy.contains(driverIdOf(entry))) return entry;
   }
-  return inside;
+  return null;
 }

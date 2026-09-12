@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
+import '../models/queue_rules.dart';
 import '../models/trip_state.dart';
 import 'fare_service.dart';
 import 'receipt_service.dart';
@@ -52,6 +53,10 @@ class DispatchService {
     double? destinationLongitude,
     double? distance,
     double? fare,
+    bool outsideServiceArea = false,
+    double outOfTownFee = 0,
+    double outOfTownKm = 0,
+    Set<String> declinedBy = const {},
   }) async {
     const maxAttempts = 5;
 
@@ -72,12 +77,24 @@ class DispatchService {
           .where('status', isEqualTo: 'waiting')
           .orderBy('checkedInAt')
           .orderBy('driverId')
-          .limit(1)
+          // Enough to look past the drivers who have already said no to this
+          // trip; still the front of the queue among those who have not.
+          .limit(1 + declinedBy.length)
           .get();
 
-      if (candidateSnap.docs.isEmpty) {
+      // A driver who turned down an out-of-town trip keeps their place but
+      // is not offered the same trip again.
+      final candidate = firstNotDeclined(
+        candidateSnap.docs,
+        declinedBy,
+        (d) => (d.data()['driverId'] ?? '').toString(),
+      );
+
+      if (candidate == null) {
         return DispatchResult.failure(
-          'No drivers are currently waiting at this terminal.',
+          declinedBy.isEmpty
+              ? 'No drivers are currently waiting at this terminal.'
+              : 'No other driver at this terminal is free right now.',
         );
       }
 
@@ -87,7 +104,7 @@ class DispatchService {
           .get();
       final passengerName = passengerDoc.data()?['name'] ?? 'Passenger';
 
-      final candidateDoc = candidateSnap.docs.first;
+      final candidateDoc = candidate;
       final candidateRef = candidateDoc.reference;
       final bookingRef = _firestore.collection('bookings').doc();
 
@@ -142,6 +159,15 @@ class DispatchService {
             'distance': distance,
             'fare': fare,
             'pickupFee': FareService.pickupFee,
+            // Out-of-town trips: the driver has to agree to them, and the
+            // fare already includes the return charge.
+            'outsideServiceArea': outsideServiceArea,
+            'outOfTownFee': outOfTownFee,
+            'outOfTownKm': outOfTownKm,
+            'outOfTownAcceptedAt': null,
+            // Carried forward so a driver who refused this trip is not
+            // offered it again by a later re-dispatch.
+            'declinedBy': declinedBy.toList(),
             'paymentMethod': null,
             'paymentStatus': PaymentState.unpaid.legacyPaymentStatus,
             'driverPhone': driverPhone,
@@ -260,6 +286,79 @@ class DispatchService {
       destinationLongitude: number('destinationLongitude'),
       distance: number('distance'),
       fare: number('fare'),
+      outsideServiceArea: released['outsideServiceArea'] == true,
+      outOfTownFee: number('outOfTownFee') ?? 0,
+      outOfTownKm: number('outOfTownKm') ?? 0,
+      declinedBy: {...?(released['declinedBy'] as List?)?.whereType<String>()},
+    );
+  }
+
+  /// A driver turning down a trip that leaves town.
+  ///
+  /// Refusing an out-of-town trip is their right, so they keep their place in
+  /// the queue — but they are not offered this same trip again, and the
+  /// passenger is passed to the next driver who has not refused it. The
+  /// passenger keeps the same booking only in spirit: a fresh one is created
+  /// for the new driver, as with an unanswered dispatch.
+  Future<DispatchResult> declineOutOfTown(String bookingId) async {
+    final bookingRef = _firestore.collection('bookings').doc(bookingId);
+
+    final released = await _firestore.runTransaction<Map<String, dynamic>?>((
+      tx,
+    ) async {
+      final snap = await tx.get(bookingRef);
+      final data = snap.data();
+      if (data == null) return null;
+      final state = TripState.fromMap(bookingId, data);
+      // Only while it is still just an offer.
+      if (state.trip != TripStatus.requested) return null;
+
+      tx.update(bookingRef, {
+        'tripStatus': TripStatus.cancelled.wire,
+        'status': TripStatus.cancelled.legacyStatus,
+        'cancelledAt': FieldValue.serverTimestamp(),
+        'cancelledReason': 'Driver declined the out-of-town trip',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      return data;
+    });
+
+    if (released == null) {
+      return DispatchResult.failure(
+        'This trip has already moved on — nothing to decline.',
+      );
+    }
+
+    // Their place is kept: check-in time untouched.
+    final entryId = released['queueEntryId'] as String?;
+    if (entryId != null) {
+      try {
+        await returnDriverToQueue(entryId);
+      } catch (e) {
+        debugPrint('Could not return the declining driver to the queue: $e');
+      }
+    }
+
+    final declinedDriver = released['driverId'] as String?;
+    double? number(String key) => (released[key] as num?)?.toDouble();
+    return dispatchNextDriver(
+      terminalId: released['terminalId'] as String? ?? '',
+      passengerId: released['passengerId'] as String? ?? '',
+      pickupLatitude: number('pickupLatitude'),
+      pickupLongitude: number('pickupLongitude'),
+      destinationLatitude: number('destinationLatitude'),
+      destinationLongitude: number('destinationLongitude'),
+      distance: number('distance'),
+      fare: number('fare'),
+      outsideServiceArea: released['outsideServiceArea'] == true,
+      outOfTownFee: number('outOfTownFee') ?? 0,
+      outOfTownKm: number('outOfTownKm') ?? 0,
+      // Everyone who has refused this trip so far, so the passenger is not
+      // handed back to a driver who already said no.
+      declinedBy: {
+        ...?(released['declinedBy'] as List?)?.whereType<String>(),
+        ?declinedDriver,
+      },
     );
   }
 

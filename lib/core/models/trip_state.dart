@@ -267,6 +267,13 @@ class TripState {
   /// …and the driver has agreed, which is what lets the trip start unpaid.
   final bool payAfterAgreed;
 
+  /// Where they are going lies outside Baliwag, far enough from the terminal
+  /// that the driver's empty return is charged for. The driver may refuse
+  /// such a trip, so the fare below already includes [outOfTownFee].
+  final bool outsideServiceArea;
+  final double outOfTownFee;
+  final double outOfTownKm;
+
   const TripState({
     required this.bookingId,
     required this.trip,
@@ -281,6 +288,9 @@ class TripState {
     this.receiptNumber,
     this.payAfterRequested = false,
     this.payAfterAgreed = false,
+    this.outsideServiceArea = false,
+    this.outOfTownFee = 0,
+    this.outOfTownKm = 0,
   });
 
   /// Reads a booking document, preferring the new fields and falling back to
@@ -308,6 +318,9 @@ class TripState {
       // Only a real true counts, so a stray value never starts a trip unpaid.
       payAfterRequested: data['payAfterRequested'] == true,
       payAfterAgreed: data['payAfterAgreed'] == true,
+      outsideServiceArea: data['outsideServiceArea'] == true,
+      outOfTownFee: (data['outOfTownFee'] as num?)?.toDouble() ?? 0,
+      outOfTownKm: (data['outOfTownKm'] as num?)?.toDouble() ?? 0,
     );
   }
 

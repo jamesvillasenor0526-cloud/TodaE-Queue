@@ -23,6 +23,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../../../config/routes.dart';
 import '../../../config/theme.dart';
 import '../../../core/models/glide.dart';
 import '../../../core/models/live_route.dart';
@@ -514,6 +515,16 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
                   icon: Icons.alt_route,
                   tooltip: 'See all routes',
                   onTap: _showOverview,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                // An emergency during a trip is exactly when a driver is on
+                // this screen, and there was no way to SOS without leaving
+                // it first.
+                _RoundButton(
+                  icon: Icons.sos,
+                  tooltip: 'Emergency SOS',
+                  color: AppTheme.errorRed,
+                  onTap: () => Navigator.pushNamed(context, AppRoutes.sos),
                 ),
               ],
             ),

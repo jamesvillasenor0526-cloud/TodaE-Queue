@@ -126,6 +126,10 @@ class GeofenceService {
     return null;
   }
 
+  /// One corner of a terminal's boundary as stored — a GeoPoint, a pair, or
+  /// a map of lat/lng — or null when it is none of those.
+  LatLng? parseBoundaryPoint(dynamic raw) => _parsePoint(raw);
+
   LatLng? _parsePoint(dynamic raw) {
     try {
       if (raw is GeoPoint) return LatLng(raw.latitude, raw.longitude);

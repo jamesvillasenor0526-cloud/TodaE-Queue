@@ -34,6 +34,10 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
   double? _terminalToPickupDistance; // ← ADD
   double? _pickupToDestinationDistance; // ← ADD
 
+  /// False when the router could not be reached and the distance is worked
+  /// out from the straight line instead, so the fare can say so.
+  bool _distanceMeasured = true;
+
   void _onMapTapped(TapPosition tapPosition, LatLng point) {
     setState(() {
       _destination = point;
@@ -60,13 +64,19 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
       final terminalPoint = _parseBoundaryPoint(boundary[0]);
       if (terminalPoint == null) return;
 
-      // Get road distance from terminal to pickup
-      final terminalToPickupDistance = await RoutingService.instance
-          .getRouteDistance(terminalPoint, pickup);
-
-      // Get road distance from pickup to destination
-      final pickupToDestinationDistance = await RoutingService.instance
-          .getRouteDistance(pickup, destination);
+      // Road distance from terminal to pickup, and from pickup to where
+      // they are going.
+      final toPickup = await RoutingService.instance.roadDistance(
+        terminalPoint,
+        pickup,
+      );
+      final toDestination = await RoutingService.instance.roadDistance(
+        pickup,
+        destination,
+      );
+      final terminalToPickupDistance = toPickup.km;
+      final pickupToDestinationDistance = toDestination.km;
+      _distanceMeasured = toPickup.measured && toDestination.measured;
 
       // Total distance
       final totalDistance =
@@ -249,7 +259,10 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                       children: [
                         const Text(
                           '🏁 Terminal → Pickup',
-                          style: TextStyle(fontSize: 13, color: AppTheme.textMuted),
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: AppTheme.textMuted,
+                          ),
                         ),
                         Text(
                           _terminalToPickupDistance != null
@@ -269,7 +282,10 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                       children: [
                         const Text(
                           '📏 Pickup → Destination',
-                          style: TextStyle(fontSize: 13, color: AppTheme.textMuted),
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: AppTheme.textMuted,
+                          ),
                         ),
                         Text(
                           _pickupToDestinationDistance != null
@@ -326,12 +342,25 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                         ),
                       ],
                     ),
+                    if (!_distanceMeasured && _destination != null)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 6),
+                        child: Text(
+                          'Estimated — the road distance could not be '
+                          'checked just now.',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppTheme.textMuted,
+                          ),
+                        ),
+                      ),
                     const SizedBox(height: 16),
                     TextButton.icon(
                       onPressed: () => setState(() {
                         _destination = null;
                         _routeDistance = null;
                         _routeFare = null;
+                        _distanceMeasured = true;
                         _terminalToPickupDistance = null; // ← ADD
                         _pickupToDestinationDistance = null; // ← ADD
                       }),

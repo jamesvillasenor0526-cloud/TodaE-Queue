@@ -31,6 +31,7 @@ import '../../shared/navigation/gliding_marker_layer.dart';
 import '../../shared/navigation/trip_route_layer.dart';
 import '../../shared/reports/my_reports_screen.dart';
 import '../../shared/sos/sos_button.dart';
+import '../../../core/models/queue_rules.dart';
 import '../../../core/services/phone_actions.dart';
 import '../../../core/services/rating_service.dart';
 
@@ -63,11 +64,28 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   bool _hasActiveEntry = false;
   String? _activeBookingId;
 
+  /// The terminal this driver is assigned to, read once instead of on every
+  /// GPS reading — which, at a reading every two seconds, was thousands of
+  /// database reads a day per driver for a value that rarely changes.
+  String? _assignedTerminalId;
+  bool _profileLoaded = false;
+
+  /// The queue entry this driver is waiting in, and the terminal's boundary,
+  /// so leaving the terminal can give up the place. See _watchMyQueue.
+  String? _waitingEntryId;
+  String? _waitingTerminalName;
+  List<LatLng>? _waitingBoundary;
+  int _readingsOutside = 0;
+  bool _leavingQueue = false;
+
   @override
   void initState() {
     super.initState();
+    _loadProfile();
     _startLocationWatch();
     _watchActiveBooking();
+    WidgetsBinding.instance.addObserver(_lifecycle);
+    _setOnline(true);
     // Passengers cannot write a driver's profile, so the rating they leave
     // never reached this driver's average. Their own app keeps it in step.
     RatingService.instance.syncMyAverage();
@@ -79,28 +97,91 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     _positionSub?.cancel();
     _pushTimer?.cancel();
     _heartbeat?.cancel();
+    WidgetsBinding.instance.removeObserver(_lifecycle);
     RatingService.instance.stop();
+    _setOnline(false);
     _geofence.stopTracking();
     super.dispose();
+  }
+
+  /// Marks this driver online or offline for the dashboard.
+  ///
+  /// Nothing ever set it back to false: 25 drivers showed as online, most of
+  /// them silent for weeks, so the dashboard's queue and map were full of
+  /// drivers who were not there. Closing the app, switching away from it and
+  /// signing out all now say so.
+  void _setOnline(bool online) {
+    FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .update({
+          'isOnline': online,
+          if (online) 'lastOnlineAt': FieldValue.serverTimestamp(),
+          if (!online) 'wentOfflineAt': FieldValue.serverTimestamp(),
+        })
+        .catchError((Object e) => debugPrint('Could not set online: $e'));
+  }
+
+  late final _lifecycle = _LifecycleWatcher(
+    onHidden: () => _setOnline(false),
+    onShown: () => _setOnline(true),
+  );
+
+  Future<void> _loadProfile() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
+      if (!mounted) return;
+      setState(() {
+        _assignedTerminalId = doc.data()?['assignedTerminalId'] as String?;
+        _profileLoaded = true;
+      });
+    } catch (e) {
+      debugPrint('Could not read the driver profile: $e');
+    }
   }
 
   void _watchActiveBooking() {
     _activeBookingSub = FirebaseFirestore.instance
         .collection('queueEntries')
         .where('driverId', isEqualTo: uid)
-        .where('status', whereIn: ['dispatched', 'accepted']) // ← ADD accepted
+        .where('status', whereIn: ['waiting', 'dispatched', 'accepted'])
         .snapshots()
         .listen((snapshot) {
-          if (snapshot.docs.isNotEmpty) {
-            final data = snapshot.docs.first.data();
-            final bookingId = data['bookingId'] as String?;
+          final docs = snapshot.docs;
+          final onTrip = docs
+              .where(
+                (d) => const [
+                  'dispatched',
+                  'accepted',
+                ].contains(d.data()['status']),
+              )
+              .firstOrNull;
+          if (onTrip != null) {
+            final bookingId = onTrip.data()['bookingId'] as String?;
             if (bookingId != null && bookingId != _activeBookingId) {
-              debugPrint('🎯 Direct listener: _activeBookingId = $bookingId');
               setState(() {
                 _activeBookingId = bookingId;
                 _hasActiveEntry = true;
               });
             }
+          }
+
+          // Waiting in the queue: watched so that driving away gives up the
+          // place, instead of holding the front of a queue from elsewhere.
+          final waiting = docs
+              .where((d) => d.data()['status'] == 'waiting')
+              .firstOrNull;
+          final entryId = waiting?.id;
+          if (entryId != _waitingEntryId) {
+            _readingsOutside = 0;
+            _waitingBoundary = null;
+            _waitingTerminalName = waiting?.data()['terminalName'] as String?;
+            setState(() => _waitingEntryId = entryId);
+            final terminalId = waiting?.data()['terminalId'] as String?;
+            if (terminalId != null) _loadWaitingBoundary(terminalId);
           }
         }, onError: _listenerError);
   }
@@ -120,6 +201,89 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     _positionSub = _geofence.positionStream.listen(_onPositionUpdate);
     _heartbeat?.cancel();
     _heartbeat = Timer.periodic(_tripHeartbeatEvery, (_) => _tripHeartbeat());
+  }
+
+  Future<void> _loadWaitingBoundary(String terminalId) async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('terminals')
+          .doc(terminalId)
+          .get();
+      final raw = doc.data()?['boundary'] as List<dynamic>? ?? [];
+      final points = [
+        for (final p in raw)
+          if (_geofence.parseBoundaryPoint(p) case final LatLng at) at,
+      ];
+      if (mounted && _waitingEntryId != null) {
+        setState(() => _waitingBoundary = points);
+      }
+    } catch (e) {
+      // No boundary, no ejection: the place is kept.
+      debugPrint('Could not read the terminal boundary: $e');
+    }
+  }
+
+  /// Gives up the queue place once the driver has really left the terminal.
+  ///
+  /// Checking in used to be the last time position mattered, so a driver
+  /// could check in, drive across town, and still be sent the next passenger
+  /// from a terminal they were nowhere near. Needs [kQueueExitFixes] readings
+  /// beyond [kQueueExitMeters] outside, so drift at the edge costs nobody
+  /// their turn.
+  Future<void> _checkStillAtTerminal(Position position) async {
+    final entryId = _waitingEntryId;
+    final boundary = _waitingBoundary;
+    if (entryId == null || boundary == null || _leavingQueue) return;
+
+    final outside = metersOutsideBoundary(
+      LatLng(position.latitude, position.longitude),
+      boundary,
+    );
+    if (outside == 0) {
+      _readingsOutside = 0;
+      return;
+    }
+    _readingsOutside++;
+    if (!leavesQueue(
+      metersOutside: outside,
+      consecutiveOutside: _readingsOutside,
+    )) {
+      return;
+    }
+
+    _leavingQueue = true;
+    final terminal = _waitingTerminalName ?? 'the terminal';
+    try {
+      await FirebaseFirestore.instance
+          .collection('queueEntries')
+          .doc(entryId)
+          .update({
+            'status': 'cancelled',
+            'cancelledAt': FieldValue.serverTimestamp(),
+            'cancelledReason': 'Left the terminal',
+            'completedAt': FieldValue.serverTimestamp(),
+          });
+      // No cooldown: they have not abandoned a passenger, and driving back
+      // should let them check in again straight away.
+      _readingsOutside = 0;
+      _lastPromptedTerminalId = null;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'You left $terminal, so you are out of the queue. '
+              'Check in again when you return.',
+            ),
+            backgroundColor: AppTheme.warning,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Could not leave the queue automatically: $e');
+    } finally {
+      _leavingQueue = false;
+    }
   }
 
   /// Sends the driver's position for the maps others watch.
@@ -204,6 +368,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     );
 
     _pushLocation(position);
+    await _checkStillAtTerminal(position);
 
     if (_hasActiveEntry || _isCheckingLocation || !mounted) return;
 
@@ -211,12 +376,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     try {
       final point = LatLng(position.latitude, position.longitude);
 
-      // Get driver's assigned terminal
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .get();
-      final assignedTerminalId = userDoc.data()?['assignedTerminalId'];
+      // Read once at start-up, not on every reading.
+      if (!_profileLoaded) return;
+      final assignedTerminalId = _assignedTerminalId;
 
       // No assigned terminal — skip
       if (assignedTerminalId == null) return;
@@ -4270,5 +4432,28 @@ class _PassengerCardState extends State<_PassengerCard> {
         );
       },
     );
+  }
+}
+
+/// Tells the screen when the app is hidden or shown, so a driver who
+/// switches away or closes the app stops counting as online.
+class _LifecycleWatcher extends WidgetsBindingObserver {
+  _LifecycleWatcher({required this.onHidden, required this.onShown});
+
+  final VoidCallback onHidden;
+  final VoidCallback onShown;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        onShown();
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+      case AppLifecycleState.hidden:
+        onHidden();
+      case AppLifecycleState.inactive:
+        break; // a passing interruption, not away
+    }
   }
 }

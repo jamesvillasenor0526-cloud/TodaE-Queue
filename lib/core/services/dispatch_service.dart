@@ -1,4 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
+
 import '../models/trip_state.dart';
 import 'fare_service.dart';
 import 'receipt_service.dart';
@@ -52,6 +54,16 @@ class DispatchService {
     double? fare,
   }) async {
     const maxAttempts = 5;
+
+    // One trip at a time. Nothing stopped a passenger booking again while a
+    // trip was running, which took a second driver out of the queue for a
+    // ride nobody was going to take.
+    final running = await activeBookingFor(passengerId);
+    if (running != null) {
+      return DispatchResult.failure(
+        'You already have a trip in progress. Finish or cancel it first.',
+      );
+    }
 
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
       final candidateSnap = await _firestore
@@ -154,6 +166,100 @@ class DispatchService {
 
     return DispatchResult.failure(
       'Could not dispatch a driver right now — please try again.',
+    );
+  }
+
+  /// The id of [passengerId]'s trip that is still running, if any.
+  Future<String?> activeBookingFor(String passengerId) async {
+    final snap = await _firestore
+        .collection('bookings')
+        .where('passengerId', isEqualTo: passengerId)
+        .where('status', whereIn: ['assigned', 'dispatched', 'accepted'])
+        .get();
+    for (final d in snap.docs) {
+      if (TripState.fromMap(d.id, d.data()).isActive) return d.id;
+    }
+    return null;
+  }
+
+  /// Puts a driver back where they were in the queue.
+  ///
+  /// For a passenger cancelling: the driver was waiting their turn and did
+  /// nothing wrong, so their check-in time is left alone and they keep their
+  /// place. Their entry used to be cancelled outright, which sent them to
+  /// the back of the queue — or out of it.
+  Future<void> returnDriverToQueue(String queueEntryId) async {
+    await _firestore.collection('queueEntries').doc(queueEntryId).update({
+      'status': 'waiting',
+      'bookingId': FieldValue.delete(),
+      'passengerId': FieldValue.delete(),
+      'dispatchedAt': FieldValue.delete(),
+    });
+  }
+
+  /// Gives up on a driver who has not answered and dispatches the next one.
+  ///
+  /// The unanswered booking is cancelled and the driver goes to the *back*
+  /// of their terminal's queue — they were offered the trip and left the
+  /// passenger waiting. Refuses if the driver has accepted in the meantime,
+  /// so a passenger tapping just as the driver accepts cannot cancel the
+  /// trip from under them.
+  Future<DispatchResult> findAnotherDriver(String bookingId) async {
+    final bookingRef = _firestore.collection('bookings').doc(bookingId);
+
+    final released = await _firestore.runTransaction<Map<String, dynamic>?>((
+      tx,
+    ) async {
+      final snap = await tx.get(bookingRef);
+      final data = snap.data();
+      if (data == null) return null;
+      final state = TripState.fromMap(bookingId, data);
+      if (state.trip != TripStatus.requested) return null; // already accepted
+
+      tx.update(bookingRef, {
+        'tripStatus': TripStatus.cancelled.wire,
+        'status': TripStatus.cancelled.legacyStatus,
+        'cancelledAt': FieldValue.serverTimestamp(),
+        'cancelledReason': 'Driver did not respond',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      return data;
+    });
+
+    if (released == null) {
+      return DispatchResult.failure(
+        'Your driver has just accepted — hold on a moment.',
+      );
+    }
+
+    final entryId = released['queueEntryId'] as String?;
+    if (entryId != null) {
+      try {
+        await _firestore.collection('queueEntries').doc(entryId).update({
+          'status': 'waiting',
+          // To the back: the passenger waited on them.
+          'checkedInAt': FieldValue.serverTimestamp(),
+          'bookingId': FieldValue.delete(),
+          'passengerId': FieldValue.delete(),
+          'dispatchedAt': FieldValue.delete(),
+        });
+      } catch (e) {
+        // Their entry is no longer ours to move; the next dispatch simply
+        // skips it if it is not waiting.
+        debugPrint('Could not requeue the unresponsive driver: $e');
+      }
+    }
+
+    double? number(String key) => (released[key] as num?)?.toDouble();
+    return dispatchNextDriver(
+      terminalId: released['terminalId'] as String? ?? '',
+      passengerId: released['passengerId'] as String? ?? '',
+      pickupLatitude: number('pickupLatitude'),
+      pickupLongitude: number('pickupLongitude'),
+      destinationLatitude: number('destinationLatitude'),
+      destinationLongitude: number('destinationLongitude'),
+      distance: number('distance'),
+      fare: number('fare'),
     );
   }
 

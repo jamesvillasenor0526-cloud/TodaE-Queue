@@ -14,6 +14,8 @@ import 'widgets/driver_eta_card.dart';
 import '../../../core/models/glide.dart';
 import '../../../core/models/location_fix.dart';
 import '../../../core/models/location_need.dart';
+import '../../../core/models/queue_rules.dart';
+import '../../../core/services/dispatch_service.dart';
 import '../../../core/models/trip_state.dart';
 import '../../../core/services/location_hub.dart';
 import '../../../core/services/receipt_service.dart';
@@ -45,6 +47,63 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
 
   /// Asked once per visit: see the receipt check in build.
   bool _receiptChecked = false;
+
+  /// While another driver is being found, so the offer can't be taken twice.
+  bool _reassigning = false;
+
+  /// Whether the dispatched driver has had long enough to accept. The clock
+  /// above redraws this every few seconds.
+  bool _waitingTooLong(Map<String, dynamic> data) {
+    if (TripState.fromMap(widget.bookingId, data).trip !=
+        TripStatus.requested) {
+      return false;
+    }
+    final at = data['dispatchTime'] ?? data['createdAt'];
+    if (at is! Timestamp) return false;
+    return waitedLongEnoughToReassign(DateTime.now().difference(at.toDate()));
+  }
+
+  /// Gives up on a driver who has not answered, and takes the passenger to
+  /// the trip with the next driver in the queue.
+  ///
+  /// Nothing used to time out: an ignored dispatch left the passenger
+  /// waiting on a driver who might have gone home.
+  Future<void> _findAnotherDriver() async {
+    setState(() => _reassigning = true);
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    try {
+      final result = await DispatchService.instance.findAnotherDriver(
+        widget.bookingId,
+      );
+      if (!mounted) return;
+      if (!result.success) {
+        setState(() => _reassigning = false);
+        messenger.showSnackBar(
+          SnackBar(content: Text(result.message ?? 'Please try again.')),
+        );
+        return;
+      }
+      messenger.showSnackBar(
+        SnackBar(content: Text('${result.driverName} is on the way.')),
+      );
+      navigator.pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => TripTrackingScreen(
+            bookingId: result.bookingId!,
+            driverName: result.driverName ?? 'Your driver',
+            terminalName: widget.terminalName,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _reassigning = false);
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not find another driver: $e')),
+      );
+    }
+  }
 
   StreamSubscription<Position>? _positionStream;
   LatLng? _passengerPosition;
@@ -225,16 +284,12 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
           .doc(widget.bookingId)
           .update({'cancelledReason': 'Passenger cancelled the trip'});
 
-      // The queue entry is the driver's own bookkeeping, not shared state.
+      // The driver keeps the place they were waiting in: they did nothing
+      // wrong. Cancelling their entry, as this used to, put them at the back
+      // of the queue — or out of it — because a passenger changed their mind.
       final qid = data['queueEntryId'] as String?;
       if (qid != null) {
-        await FirebaseFirestore.instance
-            .collection('queueEntries')
-            .doc(qid)
-            .update({
-              'status': 'cancelled',
-              'cancelledAt': FieldValue.serverTimestamp(),
-            });
+        await DispatchService.instance.returnDriverToQueue(qid);
       }
       if (context.mounted) {
         ScaffoldMessenger.of(
@@ -702,6 +757,42 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                   );
                 },
               ),
+              // Waiting on a driver who has not answered. The offer appears
+              // only once they have had [kAcceptWindow]; before that the
+              // status card's "Matching you with the next driver" stands.
+              if (_waitingTooLong(data))
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppTheme.warning.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.hourglass_bottom,
+                          color: AppTheme.warning,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            "Your driver hasn't answered yet.",
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: _reassigning ? null : _findAnotherDriver,
+                          child: Text(
+                            _reassigning ? 'Finding…' : 'Find another driver',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               if (data['receiptNumber'] != null)
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),

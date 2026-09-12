@@ -107,9 +107,33 @@ class RoutingService {
       debugPrint('Walking distance error: $e');
     }
 
-    // Fallback: Haversine distance (more accurate than simple straight line)
+    // No route: the straight line, allowed for the way streets wind. The
+    // fare is worked out from this, and a straight line through the blocks
+    // undercharges every ride the router could not reach.
     final straight = const Distance().as(LengthUnit.Kilometer, start, end);
-    debugPrint('⚠️ Fallback distance: $straight km');
-    return straight;
+    debugPrint('⚠️ Fallback distance: $straight km (estimated from the line)');
+    return straightLineRoadEstimate(straight);
+  }
+
+  /// As [getRouteDistance], and whether it is a measured road distance or an
+  /// estimate, so the fare can be shown honestly.
+  Future<({double km, bool measured})> roadDistance(
+    LatLng start,
+    LatLng end,
+  ) async {
+    final straight = const Distance().as(LengthUnit.Kilometer, start, end);
+    final km = await getRouteDistance(start, end);
+    // The fallback returns exactly the estimate; anything else came from the
+    // router.
+    final measured = (km - straightLineRoadEstimate(straight)).abs() > 0.0005;
+    return (km: km, measured: measured);
   }
 }
+
+/// How much further a street route runs than the straight line between two
+/// points, in a town laid out like Baliwag. Used only when the router cannot
+/// be reached, so a fare is not worked out from a line through the blocks.
+const double kStreetWindingFactor = 1.3;
+
+double straightLineRoadEstimate(double straightLineKm) =>
+    double.parse((straightLineKm * kStreetWindingFactor).toStringAsFixed(3));

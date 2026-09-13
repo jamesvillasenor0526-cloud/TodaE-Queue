@@ -8,9 +8,10 @@
 ///
 /// Two ways in. CRITICAL EMERGENCY is for someone who cannot explain: one
 /// confirmation and it goes, with nothing to choose or type. GET HELP is for
-/// someone with a moment to say what happened, picked with one tap. A third
-/// way, silent, starts from the home screen's SOS button (see SosButton) and
-/// never opens the red screen at all.
+/// someone with a moment to say what happened, picked with one tap — except
+/// "Something else", which on its own leaves an admin knowing nothing, so
+/// that one asks for a few words. A third way, silent, starts from the home
+/// screen's SOS button (see SosButton) and never opens the red screen at all.
 library;
 
 import 'dart:async';
@@ -58,6 +59,10 @@ class _SosScreenState extends State<SosScreen> {
   /// Choosing what happened, for GET HELP.
   bool _choosing = false;
   SosCategory? _category;
+
+  /// What they typed for "Something else" — that category on its own tells
+  /// an admin nothing, so a few words are asked for and required.
+  final TextEditingController _note = TextEditingController();
 
   /// The alert this screen last showed, so a close by an admin is reported
   /// rather than the screen silently resetting.
@@ -135,6 +140,7 @@ class _SosScreenState extends State<SosScreen> {
   void dispose() {
     _sub?.cancel();
     _clock?.cancel();
+    _note.dispose();
     super.dispose();
   }
 
@@ -174,14 +180,23 @@ class _SosScreenState extends State<SosScreen> {
     await _trigger(severity: SosSeverity.critical);
   }
 
+  /// Whether [category] can be sent as it stands: everything but "Something
+  /// else" can, and that one needs a few words first.
+  bool _noteReady(SosCategory category) =>
+      !category.needsNote || worthSendingAsNote(_note.text);
+
   /// GET HELP: choosing what happened was the deliberate step, so the send
   /// button is the confirmation.
-  Future<void> _sendIncident(SosCategory category) =>
-      _trigger(severity: SosSeverity.incident, category: category);
+  Future<void> _sendIncident(SosCategory category) => _trigger(
+    severity: SosSeverity.incident,
+    category: category,
+    note: _note.text,
+  );
 
   Future<void> _trigger({
     required SosSeverity severity,
     SosCategory? category,
+    String? note,
   }) async {
     setState(() {
       _sending = true;
@@ -192,6 +207,7 @@ class _SosScreenState extends State<SosScreen> {
       final result = await SosService.instance.trigger(
         severity: severity,
         category: category,
+        note: note,
       );
       if (mounted) setState(() => _queued = !result.delivered);
     } on SosException catch (e) {
@@ -338,6 +354,8 @@ class _SosScreenState extends State<SosScreen> {
             color: fg,
             text: 'You reported: ${category.label}',
           ),
+        if (alert.note != null)
+          _InfoRow(icon: Icons.chat_outlined, color: fg, text: alert.note!),
         _InfoRow(
           icon: alert.hasLocation ? Icons.my_location : Icons.location_off,
           color: fg,
@@ -414,6 +432,7 @@ class _SosScreenState extends State<SosScreen> {
               ? () => setState(() {
                   _choosing = true;
                   _category = null;
+                  _note.clear();
                   _error = null;
                 })
               : null,
@@ -463,7 +482,7 @@ class _SosScreenState extends State<SosScreen> {
         ),
         const SizedBox(height: AppSpacing.xs),
         const Text(
-          'Tap one. Nothing to type.',
+          'Tap one. Only "Something else" asks you to type.',
           style: TextStyle(color: AppTheme.textMuted),
         ),
         const SizedBox(height: AppSpacing.md),
@@ -479,16 +498,51 @@ class _SosScreenState extends State<SosScreen> {
               _CategoryTile(
                 category: c,
                 selected: c == chosen,
-                onTap: _sending ? null : () => setState(() => _category = c),
+                onTap: _sending
+                    ? null
+                    : () => setState(() {
+                        _category = c;
+                        if (!c.needsNote) _note.clear();
+                      }),
               ),
           ],
         ),
+        // "Something else" tells an admin nothing on its own, so it is the
+        // one category that asks for words.
+        if (chosen != null && chosen.needsNote) ...[
+          const SizedBox(height: AppSpacing.md),
+          TextField(
+            controller: _note,
+            enabled: !_sending,
+            autofocus: true,
+            maxLength: kSosNoteMaxLength,
+            maxLines: 3,
+            minLines: 2,
+            textCapitalization: TextCapitalization.sentences,
+            keyboardType: TextInputType.multiline,
+            // Typing is what the send button waits on, so it must redraw.
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(
+              labelText: 'Say what happened',
+              hintText:
+                  'A few words are enough — the driver, a stranger, '
+                  'where you are.',
+              filled: true,
+              fillColor: Colors.white,
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const Text(
+            'In danger and cannot type? Go back and use Critical emergency.',
+            style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
+          ),
+        ],
         const SizedBox(height: AppSpacing.lg),
         SizedBox(
           height: 56,
           child: FilledButton(
             style: FilledButton.styleFrom(backgroundColor: _incidentOrange),
-            onPressed: chosen != null && ready
+            onPressed: chosen != null && ready && _noteReady(chosen)
                 ? () => _sendIncident(chosen)
                 : null,
             child: _sending
@@ -500,6 +554,8 @@ class _SosScreenState extends State<SosScreen> {
                 : Text(
                     chosen == null
                         ? 'Choose what happened'
+                        : !_noteReady(chosen)
+                        ? 'Say what happened first'
                         : 'Send alert: ${chosen.label}',
                     style: const TextStyle(
                       fontSize: 17,

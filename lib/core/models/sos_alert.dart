@@ -65,7 +65,8 @@ enum SosSeverity {
       s == incident.wire ? incident : critical;
 }
 
-/// What happened, chosen with one tap — never typed.
+/// What happened, chosen with one tap — except [SosCategory.other], which
+/// means none of the others fit and only the person there can say what it is.
 enum SosCategory {
   accident('accident', 'Accident'),
   medical('medical', 'Medical emergency'),
@@ -84,6 +85,35 @@ enum SosCategory {
     }
     return null;
   }
+
+  /// Whether picking this leaves an admin none the wiser without a few
+  /// words from the person who sent it.
+  bool get needsNote => this == other;
+}
+
+/// As much as an admin can usefully read at a glance on the alert card, and
+/// short enough that a frightened person is not made to write an essay.
+const int kSosNoteMaxLength = 200;
+
+/// Tidies what was typed into what is stored: trimmed, whitespace collapsed
+/// so a wall of newlines cannot push the rest of the card off screen, and
+/// cut to [kSosNoteMaxLength]. Nothing usable becomes null.
+String? cleanSosNote(String? typed) {
+  if (typed == null) return null;
+  final tidy = typed.replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (tidy.isEmpty) return null;
+  return tidy.length <= kSosNoteMaxLength
+      ? tidy
+      : tidy.substring(0, kSosNoteMaxLength).trimRight();
+}
+
+/// Whether what has been typed says anything at all.
+///
+/// Two characters is enough — "gun", "hit", or a word in any language. The
+/// bar is low on purpose: this stands between a person and calling for help.
+bool worthSendingAsNote(String? typed) {
+  final tidy = cleanSosNote(typed);
+  return tidy != null && tidy.length >= 2;
 }
 
 /// Where a location came from, for judging how far to trust it.
@@ -193,6 +223,10 @@ class SosAlert {
   final SosSeverity severity;
   final SosCategory? category;
 
+  /// What the person typed, when the category alone says nothing — see
+  /// [SosCategory.needsNote].
+  final String? note;
+
   /// Sent by holding the SOS button, for someone who cannot be seen asking
   /// for help. Nothing on their phone may give it away, and admins are told
   /// not to call them.
@@ -221,6 +255,7 @@ class SosAlert {
     required this.status,
     this.severity = SosSeverity.critical,
     this.category,
+    this.note,
     this.silent = false,
     this.userPhone,
     this.latitude,
@@ -260,6 +295,9 @@ class SosAlert {
       status: SosStatus.fromWire(data['status'] as String?),
       severity: SosSeverity.fromWire(data['severity'] as String?),
       category: SosCategory.fromWire(data['category'] as String?),
+      // Cleaned on the way in as well as on the way out: an alert written by
+      // an older or altered app is not to be trusted to have tidied it.
+      note: cleanSosNote(data['note'] as String?),
       silent: data['silent'] == true,
       latitude: d('latitude'),
       longitude: d('longitude'),

@@ -110,6 +110,7 @@ class SosService {
   Future<({String id, bool delivered})> trigger({
     SosSeverity severity = SosSeverity.critical,
     SosCategory? category,
+    String? note,
     bool silent = false,
   }) async {
     final user = _auth.currentUser;
@@ -127,6 +128,9 @@ class SosService {
       'status': SosStatus.active.wire,
       'severity': severity.wire,
       'category': category?.wire,
+      // What they typed when no category fits. Tidied here so the length and
+      // shape of an admin's card never depend on what was pasted in.
+      'note': cleanSosNote(note),
       'silent': silent,
       'triggeredAt': FieldValue.serverTimestamp(),
       'resolvedAt': null,

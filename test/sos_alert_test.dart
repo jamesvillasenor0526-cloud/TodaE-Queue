@@ -14,6 +14,8 @@ SosAlert alert(Map<String, dynamic> data) =>
 final now = DateTime(2026, 9, 11, 12, 0);
 
 void main() {
+  _noteTests();
+
   group('status', () {
     test('open means someone still has to act', () {
       expect(SosStatus.active.isOpen, isTrue);
@@ -281,5 +283,62 @@ void main() {
     // Several kilometres at tricycle speed — responders would go to the
     // wrong place. Pinned so the rule is not loosened by accident.
     expect(kMaxLastKnownAge, const Duration(minutes: 10));
+  });
+}
+
+void _noteTests() {
+  group('saying what happened, for "Something else"', () {
+    test('that category is the only one that asks for words', () {
+      expect(SosCategory.other.needsNote, isTrue);
+      for (final c in SosCategory.values.where((c) => c != SosCategory.other)) {
+        expect(c.needsNote, isFalse, reason: '${c.wire} should not ask');
+      }
+    });
+
+    test('a couple of words is enough to send', () {
+      // The bar is low on purpose: this stands between someone and help.
+      expect(worthSendingAsNote('gun'), isTrue);
+      expect(worthSendingAsNote('hi'), isTrue);
+    });
+
+    test('nothing, a space, or a single letter is not', () {
+      expect(worthSendingAsNote(null), isFalse);
+      expect(worthSendingAsNote(''), isFalse);
+      expect(worthSendingAsNote('   '), isFalse);
+      expect(worthSendingAsNote('\n\n'), isFalse);
+      expect(worthSendingAsNote('x'), isFalse);
+    });
+
+    test('it is trimmed and its whitespace collapsed', () {
+      // A wall of newlines must not push the rest of an admin's card away.
+      expect(cleanSosNote('  driver   is\n\n drunk \n'), 'driver is drunk');
+      expect(cleanSosNote('   '), isNull);
+      expect(cleanSosNote(null), isNull);
+    });
+
+    test('a very long one is cut, not refused', () {
+      final long = cleanSosNote('x' * 500);
+      expect(long!.length, kSosNoteMaxLength);
+    });
+
+    test('an alert carries it back, cleaned', () {
+      final alert = SosAlert.fromMap('a1', {
+        'userId': 'u1',
+        'status': 'active',
+        'severity': 'incident',
+        'category': 'other',
+        'note': '  someone  followed me   ',
+      }, toDate: (_) => null);
+      expect(alert.category, SosCategory.other);
+      expect(alert.note, 'someone followed me');
+    });
+
+    test('an alert without one has none', () {
+      final alert = SosAlert.fromMap('a2', {
+        'userId': 'u1',
+        'status': 'active',
+      }, toDate: (_) => null);
+      expect(alert.note, isNull);
+    });
   });
 }

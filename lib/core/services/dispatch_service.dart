@@ -158,7 +158,10 @@ class DispatchService {
             'destinationLongitude': destinationLongitude,
             'distance': distance,
             'fare': fare,
-            'pickupFee': FareService.pickupFee,
+            // The rate in force when the trip was booked, written onto the
+            // booking: a later change to the setting must not re-price a
+            // ride that has already happened.
+            'pickupFee': FareService.instance.currentPickupFee,
             // Out-of-town trips: the driver has to agree to them, and the
             // fare already includes the return charge.
             'outsideServiceArea': outsideServiceArea,

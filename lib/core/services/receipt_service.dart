@@ -100,8 +100,10 @@ class ReceiptService {
         'destinationLongitude': amount('destinationLongitude'),
         'distance': amount('distance'),
         'fare': amount('fare'),
-        'pickupFee': amount('pickupFee', FareService.pickupFee),
-        'baseFare': FareService.minimumFare,
+        // The booking's own figures first: a receipt records what this trip
+        // was charged, not what the rates happen to be today.
+        'pickupFee': amount('pickupFee', FareService.instance.currentPickupFee),
+        'baseFare': amount('baseFare', FareService.instance.currentMinimumFare),
         'paymentMethod': booking['paymentMethod'] ?? 'cash',
         'paymentStatus': 'paid',
         'driverConfirmed': booking['driverConfirmedPayment'] == true,

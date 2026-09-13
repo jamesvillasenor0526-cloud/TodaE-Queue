@@ -224,6 +224,37 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Settings everyone reads and only a super admin writes — the fare
+    // rates, today. Fares move with fuel prices and the local ordinance, so
+    // they cannot be constants in a build; but they decide what a passenger
+    // is charged, so the limits are enforced here and not only in the form.
+    // A trip keeps the fare it was booked at regardless: that figure is
+    // written onto the booking.
+    match /settings/{settingId} {
+      function withinLimits() {
+        let d = request.resource.data;
+        return d.minimumFare is number && d.minimumFare >= 5 && d.minimumFare <= 200
+          && d.ratePerKm is number && d.ratePerKm >= 1 && d.ratePerKm <= 100
+          && d.pickupFee is number && d.pickupFee >= 0 && d.pickupFee <= 100;
+      }
+
+      allow read: if signedIn();
+      allow create, update: if isSuperAdmin()
+        && settingId == 'fare'
+        && withinLimits();
+      allow delete: if false;
+
+      // Who changed the rates, when, and what they were before. Fares are
+      // regulated, so the record of a change is kept and cannot be rewritten
+      // or removed — by anyone, the admin who made it included.
+      match /history/{changeId} {
+        allow read: if isAdmin();
+        allow create: if isSuperAdmin()
+          && request.resource.data.changedBy == request.auth.uid;
+        allow update, delete: if false;
+      }
+    }
+
     match /receipts/{receiptId} {
       allow read: if signedIn();
       allow create, update: if signedIn();

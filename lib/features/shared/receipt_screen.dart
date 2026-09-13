@@ -62,7 +62,10 @@ class ReceiptScreen extends StatelessWidget {
                       ),
                       const Text(
                         'Federation of Baliwag City TODA',
-                        style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.textMuted,
+                        ),
                       ),
                       const SizedBox(height: 4),
                       Text(
@@ -128,7 +131,10 @@ class ReceiptScreen extends StatelessWidget {
 
                 const Divider(height: 24),
 
-                // Fare Breakdown
+                // Fare Breakdown. The fallbacks below are the rates from
+                // before rates could be set, which is exactly what the
+                // receipts missing these fields were charged at — not
+                // today's rates, which would misstate an old trip.
                 _receiptRow(
                   'Base Fare',
                   '₱${receipt['baseFare']?.toStringAsFixed(0) ?? FareService.minimumFare.toStringAsFixed(0)}',
@@ -184,7 +190,10 @@ class ReceiptScreen extends StatelessWidget {
                       SizedBox(height: 4),
                       Text(
                         'This receipt is digitally generated.',
-                        style: TextStyle(fontSize: 10, color: AppTheme.textMuted),
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: AppTheme.textMuted,
+                        ),
                       ),
                     ],
                   ),
@@ -201,7 +210,10 @@ class ReceiptScreen extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: const TextStyle(color: AppTheme.textMuted, fontSize: 13)),
+        Text(
+          label,
+          style: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
+        ),
         Text(
           value,
           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),

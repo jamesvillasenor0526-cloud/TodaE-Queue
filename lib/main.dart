@@ -5,6 +5,7 @@ import 'firebase_options.dart';
 import 'config/routes.dart';
 import 'config/theme.dart';
 import 'config/theme_controller.dart';
+import 'core/services/fare_settings_service.dart';
 import 'core/services/notification_service.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -16,6 +17,11 @@ void main() async {
 
   // Load saved theme
   await ThemeController.instance.loadTheme();
+
+  // The fare rates in force. Starts from what this phone last saw, then
+  // follows the setting — so a fare can be quoted before, and without, a
+  // network.
+  await FareSettingsService.instance.start();
 
   NotificationService.onNotificationTap = (payload) {
     if (payload == 'dispatch') {

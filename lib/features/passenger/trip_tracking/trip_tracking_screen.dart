@@ -20,7 +20,9 @@ import '../../../core/models/trip_state.dart';
 import '../../../core/services/location_hub.dart';
 import '../../../core/services/receipt_service.dart';
 import '../../../core/services/trip_service.dart';
+import '../../shared/chat/message_button.dart';
 import '../../shared/reports/report_map_layer.dart';
+import '../../../core/models/trip_message.dart';
 import '../../shared/navigation/gliding_marker_layer.dart';
 import '../../shared/navigation/trip_route_layer.dart';
 import '../../../core/services/phone_actions.dart';
@@ -642,19 +644,30 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                       ),
                     ),
                     const SizedBox(width: 8),
+                    // In-app messages, which reach the driver while the trip
+                    // is running without either side learning the other's
+                    // number.
                     Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () => _messageDriver(data),
-                        icon: const Icon(Icons.message, size: 16),
-                        label: const Text(
-                          'Message',
-                          style: TextStyle(fontSize: 12),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppTheme.primaryGreen,
-                          side: const BorderSide(color: AppTheme.primaryGreen),
-                        ),
+                      child: MessageButton(
+                        bookingId: widget.bookingId,
+                        role: MessageSender.passenger,
+                        otherName:
+                            (data['driverName'] as String?)
+                                    ?.trim()
+                                    .isNotEmpty ==
+                                true
+                            ? data['driverName'] as String
+                            : 'Your driver',
+                        compact: true,
                       ),
+                    ),
+                    // SMS stays: it reaches a driver whose app is closed.
+                    const SizedBox(width: 8),
+                    IconButton(
+                      tooltip: 'Send an SMS instead',
+                      onPressed: () => _messageDriver(data),
+                      icon: const Icon(Icons.sms_outlined, size: 20),
+                      color: AppTheme.textMuted,
                     ),
                   ],
                 ),

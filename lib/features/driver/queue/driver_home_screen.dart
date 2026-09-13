@@ -29,8 +29,10 @@ import '../../shared/reports/report_sheet.dart';
 import '../navigation/navigation_panel.dart';
 import '../../shared/navigation/gliding_marker_layer.dart';
 import '../../shared/navigation/trip_route_layer.dart';
+import '../../shared/chat/message_button.dart';
 import '../../shared/reports/my_reports_screen.dart';
 import '../../shared/sos/sos_button.dart';
+import '../../../core/models/trip_message.dart';
 import '../../../core/models/queue_rules.dart';
 import '../../../core/services/phone_actions.dart';
 import '../../../core/services/rating_service.dart';
@@ -1289,6 +1291,7 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
                           // the very bottom, below the fare, map and buttons.
                           _PassengerCard(
                             passengerId: data['passengerId'] as String?,
+                            bookingId: data['bookingId'] as String? ?? '',
                             onCall: widget.onCallPassenger,
                             onMessage: widget.onMessagePassenger,
                           ),
@@ -4294,9 +4297,13 @@ class _MapLegNotice extends StatelessWidget {
 class _PassengerCard extends StatefulWidget {
   const _PassengerCard({
     required this.passengerId,
+    required this.bookingId,
     required this.onCall,
     required this.onMessage,
   });
+
+  /// The trip whose message thread this card opens.
+  final String bookingId;
 
   final String? passengerId;
   final void Function(String) onCall;
@@ -4395,10 +4402,10 @@ class _PassengerCardState extends State<_PassengerCard> {
                 ],
               ),
             ),
-            if (phone != null) ...[
-              const SizedBox(height: 8),
-              Row(
-                children: [
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                if (phone != null) ...[
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: () => widget.onCall(phone),
@@ -4411,23 +4418,33 @@ class _PassengerCardState extends State<_PassengerCard> {
                     ),
                   ),
                   const SizedBox(width: 8),
+                ],
+                // In-app messages: they reach the passenger without either
+                // side learning the other's number, and arrive while the
+                // trip is running.
+                if (widget.bookingId.isNotEmpty)
                   Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => widget.onMessage(phone),
-                      icon: const Icon(Icons.message, size: 16),
-                      label: const Text(
-                        'Message',
-                        style: TextStyle(fontSize: 12),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppTheme.primaryGreen,
-                        side: const BorderSide(color: AppTheme.primaryGreen),
-                      ),
+                    child: MessageButton(
+                      bookingId: widget.bookingId,
+                      role: MessageSender.driver,
+                      otherName: name,
+                      speakIncoming: true,
+                      compact: true,
                     ),
                   ),
+                // SMS stays as a way out: it reaches a passenger whose app
+                // is closed, which in-app messages cannot.
+                if (phone != null) ...[
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: 'Send an SMS instead',
+                    onPressed: () => widget.onMessage(phone),
+                    icon: const Icon(Icons.sms_outlined, size: 20),
+                    color: AppTheme.textMuted,
+                  ),
                 ],
-              ),
-            ],
+              ],
+            ),
           ],
         );
       },

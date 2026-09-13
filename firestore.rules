@@ -123,6 +123,37 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create, update: if signedIn();
       allow delete: if false;
+
+      // Messages between the driver and the passenger of this trip.
+      //
+      // Narrower than the booking above deliberately: a booking is written
+      // by both apps in ways no rule can safely separate yet, but a message
+      // has exactly one author and two readers, and it is the one place in
+      // the app where people talk to each other. Nobody else reads it —
+      // except an admin, who has to be able to look into a complaint.
+      //
+      // Nothing may be edited or deleted, by anyone. A thread is evidence:
+      // a passenger reporting harassment must not find the words gone.
+      match /messages/{messageId} {
+        function partyToTrip() {
+          return bookingOf(bookingId).get('driverId', '') == request.auth.uid
+            || bookingOf(bookingId).get('passengerId', '') == request.auth.uid;
+        }
+
+        allow read: if signedIn() && (partyToTrip() || isAdmin());
+
+        allow create: if signedIn()
+          && partyToTrip()
+          // The author is whoever is signed in — you cannot write as the
+          // other person.
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.senderRole in ['driver', 'passenger']
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 500;
+
+        allow update, delete: if false;
+      }
     }
 
     // Ratings — one per trip, by that trip's passenger, once it has ended.

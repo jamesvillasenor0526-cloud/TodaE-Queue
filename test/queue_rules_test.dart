@@ -70,6 +70,30 @@ void main() {
     });
   });
 
+  group('giving up a place for leaving the terminal', () {
+    test('a waiting driver who drives away loses their place', () {
+      expect(mayGiveUpPlace('waiting'), isTrue);
+    });
+
+    test(
+      'a dispatched driver never does — they are going to the passenger',
+      () {
+        // This stranded a real booking: the entry was cancelled seconds after
+        // dispatch, the booking stayed REQUESTED against a cancelled entry,
+        // and the trip never appeared on the driver's screen.
+        expect(mayGiveUpPlace('dispatched'), isFalse);
+        expect(mayGiveUpPlace('accepted'), isFalse);
+      },
+    );
+
+    test('an entry that is already finished is left alone', () {
+      expect(mayGiveUpPlace('completed'), isFalse);
+      expect(mayGiveUpPlace('cancelled'), isFalse);
+      expect(mayGiveUpPlace(null), isFalse);
+      expect(mayGiveUpPlace('something new'), isFalse);
+    });
+  });
+
   group('who is offered a trip that has been refused', () {
     // Drivers in queue order, front first.
     const queue = ['mang-tony', 'boy', 'jun'];

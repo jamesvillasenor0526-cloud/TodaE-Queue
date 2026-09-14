@@ -256,15 +256,39 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     _leavingQueue = true;
     final terminal = _waitingTerminalName ?? 'the terminal';
     try {
-      await FirebaseFirestore.instance
-          .collection('queueEntries')
-          .doc(entryId)
-          .update({
-            'status': 'cancelled',
-            'cancelledAt': FieldValue.serverTimestamp(),
-            'cancelledReason': 'Left the terminal',
-            'completedAt': FieldValue.serverTimestamp(),
-          });
+      // Re-read inside a transaction and give up the place only if the
+      // entry is still waiting.
+      //
+      // Whether the driver is waiting is decided here from local state,
+      // which can be a few seconds behind — and the same account signed in
+      // on a second device has its own idea of where the driver is. Without
+      // this check, a driver dispatched a moment ago was removed from the
+      // queue for "leaving the terminal", which is exactly what a driver on
+      // their way to a passenger is supposed to do. It happened: a booking
+      // was left REQUESTED against a cancelled entry, and the trip never
+      // appeared on the driver's screen.
+      final left = await FirebaseFirestore.instance.runTransaction<bool>((
+        tx,
+      ) async {
+        final ref = FirebaseFirestore.instance
+            .collection('queueEntries')
+            .doc(entryId);
+        final snap = await tx.get(ref);
+        if (!mayGiveUpPlace(snap.data()?['status'] as String?)) return false;
+        tx.update(ref, {
+          'status': 'cancelled',
+          'cancelledAt': FieldValue.serverTimestamp(),
+          'cancelledReason': 'Left the terminal',
+          'completedAt': FieldValue.serverTimestamp(),
+        });
+        return true;
+      });
+      if (!left) {
+        // Dispatched in the meantime: they have a passenger, not a lost
+        // place. Say nothing and let the trip screen take over.
+        _readingsOutside = 0;
+        return;
+      }
       // No cooldown: they have not abandoned a passenger, and driving back
       // should let them check in again straight away.
       _readingsOutside = 0;
@@ -940,7 +964,18 @@ class _QueueTab extends StatelessWidget {
                   }
 
                   final entries = snapshot.data?.docs ?? [];
-                  final activeEntry = entries.isNotEmpty ? entries.first : null;
+                  // A trip outranks a place in the queue. Taking whichever
+                  // entry came back first meant a leftover 'waiting' entry
+                  // could hide the trip the driver had just been given.
+                  final activeEntry =
+                      entries
+                          .where(
+                            (d) => const ['dispatched', 'accepted'].contains(
+                              (d.data() as Map<String, dynamic>)['status'],
+                            ),
+                          )
+                          .firstOrNull ??
+                      entries.firstOrNull;
                   final activeData =
                       activeEntry?.data() as Map<String, dynamic>?;
                   final isDispatched = activeData?['status'] == 'dispatched';

@@ -39,6 +39,18 @@ bool leavesQueue({
   required int consecutiveOutside,
 }) => metersOutside > kQueueExitMeters && consecutiveOutside >= kQueueExitFixes;
 
+/// Whether a queue entry may be given up because the driver has left the
+/// terminal.
+///
+/// Only one that is still waiting. A driver who has been dispatched or has
+/// accepted is *supposed* to leave — they are going to the passenger — and
+/// taking their entry away there strands the booking: it stays REQUESTED,
+/// pointing at a cancelled entry, and the trip never appears on the
+/// driver's screen. That happened, because the check ran against local
+/// state that was seconds out of date, and a second device signed in as the
+/// same driver had its own idea of where they were.
+bool mayGiveUpPlace(String? entryStatus) => entryStatus == 'waiting';
+
 /// Whether a dispatched driver has had long enough to answer.
 bool waitedLongEnoughToReassign(Duration sinceDispatch) =>
     sinceDispatch >= kAcceptWindow;

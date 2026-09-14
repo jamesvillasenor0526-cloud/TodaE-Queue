@@ -66,6 +66,21 @@ class VoiceService extends ChangeNotifier {
     _ready = true;
   }
 
+  /// Readies the engine before anything needs saying.
+  ///
+  /// The first utterance otherwise carries the cost of starting the
+  /// text-to-speech engine — most of a second on a modest phone — and that
+  /// second is spent driving towards the turn being announced. Called when
+  /// navigation opens, so the first cue is as prompt as the rest.
+  Future<void> warmUp() async {
+    if (!_enabled) return;
+    try {
+      await _prepare();
+    } catch (e) {
+      debugPrint('Voice guidance could not be readied: $e');
+    }
+  }
+
   /// Says [line], if voice is on. Silent no-op otherwise.
   Future<void> speak(String line) async {
     if (!_enabled || line.trim().isEmpty) return;

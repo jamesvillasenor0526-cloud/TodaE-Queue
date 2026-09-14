@@ -81,7 +81,10 @@ void main() {
     test('a turn that appears close is announced once, not twice', () {
       // On a short link the prepare and act cues would land seconds apart.
       final guide = VoiceGuide();
-      expect(guide.update(turn: turn(100), now: now), 'Turn left onto B.S. Aquino Avenue.');
+      expect(
+        guide.update(turn: turn(100), now: now),
+        'Turn left onto B.S. Aquino Avenue.',
+      );
       expect(guide.update(turn: turn(30), now: later(60)), isNull);
     });
 
@@ -94,7 +97,10 @@ void main() {
 
     test('the next turn is announced even on the same road name', () {
       final guide = VoiceGuide();
-      guide.update(turn: turn(40, road: 'Main'), now: now);
+      guide.update(
+        turn: turn(40, road: 'Main'),
+        now: now,
+      );
       final second = guide.update(
         turn: UpcomingTurn(
           step: const NavStep(
@@ -114,7 +120,11 @@ void main() {
       final guide = VoiceGuide();
       final said = guide.update(
         turn: const UpcomingTurn(
-          step: NavStep(road: 'L. Beltran Street', maneuver: 'arrive', distanceMeters: 0),
+          step: NavStep(
+            road: 'L. Beltran Street',
+            maneuver: 'arrive',
+            distanceMeters: 0,
+          ),
           metersAway: 20,
         ),
         now: now,
@@ -141,24 +151,117 @@ void main() {
     });
   });
 
+  group('cues timed by how long until the turn, not only how far', () {
+    test('a tricycle in town keeps the old distances', () {
+      // 8 m/s: the speed-based act distance is under the fixed 60 m, so the
+      // fixed one stands.
+      expect(
+        cueDistance(
+          atLeastMeters: kActMeters,
+          lead: kActLead,
+          speedMetersPerSecond: 0,
+        ),
+        kActMeters,
+      );
+    });
+
+    test('faster driving moves the cue further out', () {
+      // At 16 m/s, 60 m is under four seconds' warning — too late to act on.
+      final fast = cueDistance(
+        atLeastMeters: kActMeters,
+        lead: kActLead,
+        speedMetersPerSecond: 16,
+      );
+      expect(fast, greaterThan(kActMeters * 2));
+      final prepare = cueDistance(
+        atLeastMeters: kPrepareMeters,
+        lead: kPrepareLead,
+        speedMetersPerSecond: 20,
+      );
+      expect(prepare, greaterThan(kPrepareMeters));
+    });
+
+    test('the lead covers the time it takes to say the words', () {
+      // A cue that begins as the driver reaches the junction is no cue.
+      final withLatency = cueDistance(
+        atLeastMeters: 0,
+        lead: Duration.zero,
+        speedMetersPerSecond: 10,
+      );
+      expect(withLatency, greaterThan(10));
+    });
+
+    test('nonsense speeds fall back to the fixed distance', () {
+      for (final speed in [double.nan, double.infinity, -5.0]) {
+        expect(
+          cueDistance(
+            atLeastMeters: kActMeters,
+            lead: kActLead,
+            speedMetersPerSecond: speed,
+          ),
+          kActMeters,
+        );
+      }
+    });
+
+    test('a turn is announced sooner when driving faster', () {
+      // 150 m out: silence for a tricycle at walking-ish pace, spoken for
+      // something moving quickly, because it is four seconds away.
+      expect(
+        VoiceGuide().update(turn: turn(150), now: now),
+        isNot(contains('Turn left onto')),
+      );
+      expect(
+        VoiceGuide().update(
+          turn: turn(150),
+          now: now,
+          speedMetersPerSecond: 20,
+        ),
+        'Turn left onto B.S. Aquino Avenue.',
+      );
+    });
+  });
+
   group('not talking over itself', () {
-    test('two cues never land within a few seconds of each other', () {
+    test('an ordinary cue waits rather than talking over the last one', () {
+      final guide = VoiceGuide();
+      expect(guide.update(turn: turn(280), now: now), isNotNull);
+      // A condition half a kilometre off can wait a few seconds.
+      expect(
+        guide.update(
+          turn: null,
+          now: now.add(const Duration(seconds: 2)),
+          ahead: [
+            Incident(
+              reports: [report(ReportType.flooding, confirmations: 2)],
+              location: const LatLng(14.954, 120.901),
+            ),
+          ],
+        ),
+        isNull,
+      );
+    });
+
+    test('the turn at hand is never held back by the gap', () {
+      // It used to be: a prepare cue two seconds earlier silenced "turn
+      // left" until the junction had gone by. The whole point of the cue is
+      // that it arrives in time to act on.
       final guide = VoiceGuide();
       expect(guide.update(turn: turn(280), now: now), isNotNull);
       expect(
-        guide.update(
-          turn: turn(40),
-          now: now.add(const Duration(seconds: 2)),
-          reroute: RerouteReason.roadBlocked,
-        ),
-        isNull,
+        guide.update(turn: turn(40), now: now.add(const Duration(seconds: 2))),
+        'Turn left onto B.S. Aquino Avenue.',
       );
     });
 
     test('a suppressed cue is not lost, only delayed', () {
       final guide = VoiceGuide();
       guide.update(turn: turn(280), now: now);
-      guide.update(turn: turn(40), now: now.add(const Duration(seconds: 2)));
+      // Same turn, still only prepared for: nothing new to say yet.
+      expect(
+        guide.update(turn: turn(270), now: now.add(const Duration(seconds: 2))),
+        isNull,
+      );
       expect(guide.update(turn: turn(35), now: later(30)), isNotNull);
     });
   });

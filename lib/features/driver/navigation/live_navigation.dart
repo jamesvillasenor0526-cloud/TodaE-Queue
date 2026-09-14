@@ -249,6 +249,9 @@ class LiveNavigation extends ChangeNotifier {
       // pickup, and they need saying again.
       _guide.reset();
       VoiceService.instance.stop();
+      // Start the engine now rather than on the first turn, when the second
+      // it takes is a second spent driving towards that turn.
+      unawaited(VoiceService.instance.warmUp());
       _lastRoutingAt = null;
       _lastRoutingPosition = null;
       notifyListeners();
@@ -494,6 +497,10 @@ class LiveNavigation extends ChangeNotifier {
       now: DateTime.now(),
       reroute: reason,
       ahead: groupIncidents(r.incidentsOnRoute, now: DateTime.now()),
+      // Cues are timed by how long until the turn, not only how far: 60 m
+      // is seven seconds' warning at tricycle speed and half that on the
+      // highway.
+      speedMetersPerSecond: _speed,
     );
     if (line != null) VoiceService.instance.speak(line);
   }

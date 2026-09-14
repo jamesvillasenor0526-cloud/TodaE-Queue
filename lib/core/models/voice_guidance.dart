@@ -19,6 +19,35 @@ const double kPrepareMeters = 300;
 /// Close enough that "turn left" means now, not soon.
 const double kActMeters = 60;
 
+/// How long before the turn each cue should land, at the speed being
+/// driven. Distance alone is not enough: 60 m is seven seconds' warning for
+/// a tricycle and three and a half for a car on the highway, and the second
+/// is too late to act on. Whichever is the greater of the fixed distance
+/// and the speed-based one wins, so slow traffic keeps the old behaviour.
+const Duration kActLead = Duration(seconds: 8);
+const Duration kPrepareLead = Duration(seconds: 35);
+
+/// Added to every lead: a phone does not start speaking the instant it is
+/// asked. The engine takes a moment to begin, and the sentence itself takes
+/// two or three seconds to say — all of it time the driver is still
+/// travelling towards the turn.
+const Duration kSpeechLatency = Duration(milliseconds: 2500);
+
+/// The distance at which a cue should be spoken, given the speed.
+double cueDistance({
+  required double atLeastMeters,
+  required Duration lead,
+  required double speedMetersPerSecond,
+}) {
+  final speed = speedMetersPerSecond.isFinite && speedMetersPerSecond > 0
+      ? speedMetersPerSecond
+      : 0.0;
+  final seconds =
+      (lead + kSpeechLatency).inMilliseconds / Duration.millisecondsPerSecond;
+  final travelled = speed * seconds;
+  return travelled > atLeastMeters ? travelled : atLeastMeters;
+}
+
 /// A manoeuvre closer than this when first seen gets one announcement, not
 /// two. Two cues a second apart on a short link is noise, not guidance.
 const double kSingleCueMeters = 120;
@@ -65,27 +94,41 @@ class VoiceGuide {
     required DateTime now,
     RerouteReason reroute = RerouteReason.none,
     List<Incident> ahead = const [],
+    double speedMetersPerSecond = 0,
   }) {
-    final last = _lastSpokeAt;
-    if (last != null && now.difference(last) < kMinSpeechGap) return null;
+    final cue = _choose(
+      turn: turn,
+      reroute: reroute,
+      ahead: ahead,
+      now: now,
+      speed: speedMetersPerSecond,
+    );
+    if (cue == null) return null;
 
-    final line = _choose(turn: turn, reroute: reroute, ahead: ahead, now: now);
-    if (line != null) _lastSpokeAt = now;
-    return line;
+    // The gap keeps cues from talking over each other — but not at the cost
+    // of the one that matters. "Turn left" held back for a second because
+    // something was said four seconds ago arrives after the junction.
+    final last = _lastSpokeAt;
+    if (!cue.urgent && last != null && now.difference(last) < kMinSpeechGap) {
+      return null;
+    }
+    _lastSpokeAt = now;
+    return cue.line;
   }
 
   /// Priority order: why the route changed, then the manoeuvre at hand, then
   /// the one coming, then conditions. A driver mid-turn does not need to
   /// hear about traffic half a kilometre away.
-  String? _choose({
+  ({String line, bool urgent})? _choose({
     required UpcomingTurn? turn,
     required RerouteReason reroute,
     required List<Incident> ahead,
     required DateTime now,
+    required double speed,
   }) {
     if (reroute != RerouteReason.none && reroute != _lastReroute) {
       _lastReroute = reroute;
-      return switch (reroute) {
+      final line = switch (reroute) {
         // Not "closed": this also fires for a confirmed accident or a
         // fallen tree, and telling a driver the road is shut when it has a
         // crash on it is a small lie they will notice.
@@ -94,28 +137,47 @@ class VoiceGuide {
         RerouteReason.offRoute => 'Recalculating.',
         RerouteReason.none => null,
       };
+      if (line != null) return (line: line, urgent: true);
     }
     if (reroute == RerouteReason.none) _lastReroute = RerouteReason.none;
 
     if (turn != null) {
       final key = turn.key;
+      // How far out each cue belongs at this speed, never nearer than the
+      // fixed distances.
+      final act = cueDistance(
+        atLeastMeters: kActMeters,
+        lead: kActLead,
+        speedMetersPerSecond: speed,
+      );
+      final prepare = cueDistance(
+        atLeastMeters: kPrepareMeters,
+        lead: kPrepareLead,
+        speedMetersPerSecond: speed,
+      );
 
-      if (turn.metersAway <= kActMeters) {
+      if (turn.metersAway <= act) {
         if (_acted.add(key)) {
           // A manoeuvre reached without ever being prepared for was already
           // close when it appeared; mark it so nothing announces it late.
           _prepared.add(key);
-          return _spoken(turn.step);
+          // The cue a driver has to act on: never held back for the gap.
+          return (line: _spoken(turn.step), urgent: true);
         }
-      } else if (turn.metersAway <= kPrepareMeters) {
+      } else if (turn.metersAway <= prepare) {
         if (!_acted.contains(key) && _prepared.add(key)) {
           // Too close to be worth two separate cues: say it once, plainly,
           // and let the act cue stay silent.
           if (turn.metersAway <= kSingleCueMeters) {
             _acted.add(key);
-            return _spoken(turn.step);
+            return (line: _spoken(turn.step), urgent: true);
           }
-          return 'In ${spokenDistance(turn.metersAway)}, ${_lowerFirst(_spoken(turn.step))}';
+          return (
+            line:
+                'In ${spokenDistance(turn.metersAway)}, '
+                '${_lowerFirst(_spoken(turn.step))}',
+            urgent: false,
+          );
         }
       }
     }
@@ -127,7 +189,7 @@ class VoiceGuide {
       // they are on the map, and the map is enough for a maybe.
       if (incident.statusAt(now) == IncidentStatus.reported) continue;
       _warned.add(key);
-      return '${incident.type.label} reported ahead.';
+      return (line: '${incident.type.label} reported ahead.', urgent: false);
     }
 
     return null;

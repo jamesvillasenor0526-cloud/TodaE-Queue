@@ -381,6 +381,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               // So the passenger can tell a live position from one a
               // phone stopped sending minutes ago.
               'driverLocationAt': FieldValue.serverTimestamp(),
+              // How fast and which way, so the passenger's map can carry
+              // the tricycle along the road between these updates instead
+              // of dragging it from one two-second-old dot to the next.
+              'driverSpeed': position.speed.isFinite && position.speed > 0
+                  ? position.speed
+                  : 0,
+              'driverHeading': position.heading.isFinite
+                  ? position.heading
+                  : null,
             }, SetOptions(merge: true));
       }
     } catch (e) {

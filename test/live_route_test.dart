@@ -40,10 +40,14 @@ void main() {
     expect(routes, hasLength(3));
     for (final r in routes) {
       // Every alternative runs the whole way, start to destination.
-      expect(distance.as(LengthUnit.Meter, r.points.first, main.points.first),
-          lessThan(50));
-      expect(distance.as(LengthUnit.Meter, r.points.last, main.points.last),
-          lessThan(50));
+      expect(
+        distance.as(LengthUnit.Meter, r.points.first, main.points.first),
+        lessThan(50),
+      );
+      expect(
+        distance.as(LengthUnit.Meter, r.points.last, main.points.last),
+        lessThan(50),
+      );
     }
   });
 
@@ -56,7 +60,10 @@ void main() {
 
     test('the geometry is the length TomTom reported', () {
       // Within 1%: step distances are scaled to it, so it has to be right.
-      expect(cum.last, closeTo(main.distanceMeters, main.distanceMeters * 0.01));
+      expect(
+        cum.last,
+        closeTo(main.distanceMeters, main.distanceMeters * 0.01),
+      );
     });
 
     test('driving along it, what is left only ever shrinks', () {
@@ -143,6 +150,46 @@ void main() {
     });
   });
 
+  group('the line every map draws', () {
+    // What the passenger's tracking map and the driver's mini map show. It
+    // used to be the whole route, fetched once and never trimmed: the
+    // marker slid along a line that kept its tail behind the vehicle for
+    // the entire trip, so with a fake GPS only the marker appeared to move.
+    test('starts where the vehicle is, not where the route was fetched', () {
+      final ahead = lineAhead(main.points, beside(120, 6));
+      expect(
+        distance.as(LengthUnit.Meter, ahead.first, main.points[120]),
+        lessThan(30),
+      );
+      expect(ahead.last, main.points.last);
+    });
+
+    test('shortens with every reading', () {
+      final lengths = [40, 90, 150, 200]
+          .map(
+            (i) => cumulativeMeters(lineAhead(main.points, beside(i, 4))).last,
+          )
+          .toList();
+      for (var i = 1; i < lengths.length; i++) {
+        expect(lengths[i], lessThan(lengths[i - 1]));
+      }
+    });
+
+    test('a vehicle nowhere near the route keeps the whole line', () {
+      // Snapping something a kilometre away would draw the road from a
+      // place the driver is not.
+      final faraway = distance.offset(main.points.first, 1200, 90);
+      expect(lineAhead(main.points, faraway), main.points);
+    });
+
+    test('no position, or nothing to draw, changes nothing', () {
+      expect(lineAhead(main.points, null), main.points);
+      expect(lineAhead(const [], beside(10, 5)), isEmpty);
+      final single = [main.points.first];
+      expect(lineAhead(single, beside(10, 5)), single);
+    });
+  });
+
   group('the next turn, counting down live', () {
     test('from the start it is the first real turn, not "depart"', () {
       final up = upcomingAt(main, 0, geometryMeters: cum.last)!;
@@ -205,11 +252,25 @@ void main() {
     test('two alternatives get labels in different places', () {
       // Each placed where its own route goes its own way, so the two labels
       // never stack on a road the alternatives share.
-      final a = labelAnchor(routes[1].points, main.points, others: [routes[2].points])!;
-      final b = labelAnchor(routes[2].points, main.points, others: [routes[1].points])!;
+      final a = labelAnchor(
+        routes[1].points,
+        main.points,
+        others: [routes[2].points],
+      )!;
+      final b = labelAnchor(
+        routes[2].points,
+        main.points,
+        others: [routes[1].points],
+      )!;
       expect(distance.as(LengthUnit.Meter, a, b), greaterThan(200));
-      expect(nearestOnWay(routes[2].points, a)!.distanceMeters, greaterThanOrEqualTo(40));
-      expect(nearestOnWay(routes[1].points, b)!.distanceMeters, greaterThanOrEqualTo(40));
+      expect(
+        nearestOnWay(routes[2].points, a)!.distanceMeters,
+        greaterThanOrEqualTo(40),
+      );
+      expect(
+        nearestOnWay(routes[1].points, b)!.distanceMeters,
+        greaterThanOrEqualTo(40),
+      );
     });
 
     test('no label when the two routes never separate', () {
@@ -338,20 +399,17 @@ void main() {
       // spec's example.
       final choices = buildChoices([plain(1380), plain(1080), plain(1200)])!;
       expect(choices.recommended.route.durationSeconds, 1080);
-      expect(
-        choices.alternatives.map((a) => a.route.durationSeconds),
-        [1200, 1380],
-      );
+      expect(choices.alternatives.map((a) => a.route.durationSeconds), [
+        1200,
+        1380,
+      ]);
       expect(choices.all, hasLength(3));
     });
 
     test('a detour half again as long is still not offered', () {
       // The existing rule against absurd loops holds with more alternatives.
       final choices = buildChoices([plain(600), plain(720), plain(900)])!;
-      expect(
-        choices.alternatives.map((a) => a.route.durationSeconds),
-        [720],
-      );
+      expect(choices.alternatives.map((a) => a.route.durationSeconds), [720]);
     });
 
     test('no more than two alternatives', () {
@@ -371,7 +429,8 @@ void main() {
     // and back about 900 m in.
     final captured = File('test/fixtures/osrm_detour_with_loop.json');
     final looped = [
-      for (final p in (jsonDecode(captured.readAsStringSync())['points'] as List))
+      for (final p
+          in (jsonDecode(captured.readAsStringSync())['points'] as List))
         LatLng((p as List)[0] as double, p[1] as double),
     ];
 
@@ -426,8 +485,14 @@ void main() {
       expect(sharedFraction(main.points, main.points), closeTo(1, 0.01));
       // TomTom's third route follows the fastest for three-quarters of its
       // length; the second takes a different way for more than half.
-      expect(sharedFraction(routes[2].points, main.points), closeTo(0.76, 0.02));
-      expect(sharedFraction(routes[1].points, main.points), closeTo(0.46, 0.02));
+      expect(
+        sharedFraction(routes[2].points, main.points),
+        closeTo(0.76, 0.02),
+      );
+      expect(
+        sharedFraction(routes[1].points, main.points),
+        closeTo(0.46, 0.02),
+      );
     });
 
     test('the main way with a variation is not offered as another way', () {

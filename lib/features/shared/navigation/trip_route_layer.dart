@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../../../core/models/live_route.dart';
 import '../../../core/services/navigation_service.dart';
 import '../../../core/services/routing_service.dart';
 
@@ -52,6 +53,15 @@ class TripRouteLayer extends StatefulWidget {
 class _TripRouteLayerState extends State<TripRouteLayer> {
   List<LatLng>? _fallback;
 
+  /// When the fallback was last asked for, so a moving driver does not ask
+  /// the router again every couple of seconds.
+  DateTime? _fetchedAt;
+
+  /// The least time between fallback fetches while the driver is on the
+  /// route. The line still moves in between — it is trimmed locally — so
+  /// this costs nothing visible.
+  static const Duration _refetchEvery = Duration(seconds: 45);
+
   @override
   void initState() {
     super.initState();
@@ -61,7 +71,25 @@ class _TripRouteLayerState extends State<TripRouteLayer> {
   @override
   void didUpdateWidget(covariant TripRouteLayer old) {
     super.didUpdateWidget(old);
-    if (old.from != widget.from || old.to != widget.to) _fetchFallback();
+    // Where they are going changed: the old line is about the wrong place.
+    if (old.to != widget.to) {
+      _fetchFallback();
+      return;
+    }
+    if (old.from == widget.from) return;
+
+    // The driver moved. The line is trimmed against their position on every
+    // build, so a new route is only worth fetching when they have left the
+    // one being shown — or when it is old enough to be worth refreshing.
+    final route = _fallback;
+    final wandered =
+        route == null ||
+        (progressAlong(route, widget.from)?.offRouteMeters ?? double.infinity) >
+            kOnRouteMeters;
+    final stale =
+        _fetchedAt == null ||
+        DateTime.now().difference(_fetchedAt!) > _refetchEvery;
+    if (wandered && stale) _fetchFallback();
   }
 
   /// Identifies a route cheaply, so the camera only moves when the route
@@ -94,6 +122,7 @@ class _TripRouteLayerState extends State<TripRouteLayer> {
   }
 
   Future<void> _fetchFallback() async {
+    _fetchedAt = DateTime.now();
     try {
       final points = await RoutingService.instance.getRoute(
         widget.from,
@@ -115,15 +144,22 @@ class _TripRouteLayerState extends State<TripRouteLayer> {
         // The published route wins whenever there is one: it is what the
         // driver is actually following.
         final usingPublished = published != null && published.hasRoute;
-        final points = usingPublished
+        final whole = usingPublished
             ? published.routePoints
             : (_fallback ?? [widget.from, widget.to]);
 
-        // Frame the whole route whenever it changes. Without this the map
-        // sits at a fixed zoom showing a few hundred metres, where two
-        // different routes look identical because they share the road just
-        // ahead — a reroute happens and the driver cannot see that it did.
-        _fitTo(points);
+        // Only what is still ahead. A route is fetched every so often, not
+        // every second, so drawing it whole left a line that never moved
+        // while the vehicle did — the marker slid along a line trailing
+        // behind it the whole way. Trimmed here, the line starts under the
+        // vehicle and shortens as it goes, on every map, without asking the
+        // router for anything.
+        final points = lineAhead(whole, widget.from);
+
+        // Frame the route whenever it changes — the whole one, not the
+        // trimmed line. Framing what is left would move the camera on every
+        // GPS reading, which is the map fighting the person reading it.
+        _fitTo(whole);
 
         if (points.length < 2) return const SizedBox.shrink();
 

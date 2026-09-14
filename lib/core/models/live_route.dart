@@ -119,6 +119,35 @@ List<LatLng> remainingLine(List<LatLng> points, RouteProgress p) => [
   ...points.sublist(math.min(p.segment + 1, points.length)),
 ];
 
+/// How far from a route a position may be and still be considered on it,
+/// for the purpose of drawing the line ahead.
+///
+/// Generous: this only decides whether the line is trimmed, and a driver on
+/// a service road beside the highway should still see the road shorten in
+/// front of them.
+const double kOnRouteMeters = 150;
+
+/// The part of [points] still ahead of [position] — the line as it should
+/// be drawn on any map following a trip.
+///
+/// A route is fetched once and then only occasionally refetched, so drawing
+/// it whole leaves a line that never moves while the driver does: the
+/// marker slides along a line that keeps its tail behind them the whole
+/// way. Trimmed here, the line starts under the vehicle and shortens as it
+/// goes, on every map, without asking the router for anything.
+///
+/// A position that is nowhere near the route — more than [kOnRouteMeters]
+/// away — leaves it whole. Snapping something that far off would draw a
+/// line from a place the driver is not.
+List<LatLng> lineAhead(List<LatLng> points, LatLng? position) {
+  if (position == null || points.length < 2) return points;
+  final progress = progressAlong(points, position);
+  if (progress == null || progress.offRouteMeters > kOnRouteMeters) {
+    return points;
+  }
+  return remainingLine(points, progress);
+}
+
 /// [route] from the driver's position onwards, as if fetched from there.
 ///
 /// For reusing a route found a minute or two ago without asking for it

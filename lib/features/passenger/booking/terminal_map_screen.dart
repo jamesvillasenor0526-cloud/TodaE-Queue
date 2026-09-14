@@ -352,14 +352,13 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
                   initialZoom: 15,
                 ),
                 children: [
-                  AppTileLayer(),
+                  AppTileLayer(muted: false),
                   // Shaded beneath the terminal pins so the traffic colour
                   // never hides the thing the user came here to tap.
                   TrafficOverlay(
                     origin: _userLocation ?? _baliwagCenter,
                     onReportsChanged: (reports) {
-                      if (!mounted ||
-                          reports.length == _nearbyReports.length) {
+                      if (!mounted || reports.length == _nearbyReports.length) {
                         return;
                       }
                       setState(() => _nearbyReports = reports);

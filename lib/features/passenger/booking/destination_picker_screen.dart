@@ -241,7 +241,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
               onTap: _onMapTapped,
             ),
             children: [
-              AppTileLayer(),
+              AppTileLayer(muted: false),
               // The town line, so it is clear where the ordinary fare ends.
               if (ServiceAreaService.instance.area.isUsable)
                 PolylineLayer(

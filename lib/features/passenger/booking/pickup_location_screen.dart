@@ -119,7 +119,7 @@ class _PickupLocationScreenState extends State<PickupLocationScreen> {
                     onTap: _onMapTapped,
                   ),
                   children: [
-                    AppTileLayer(),
+                    AppTileLayer(muted: false),
                     // Selected pickup pin (red)
                     if (_selectedLocation != null)
                       MarkerLayer(

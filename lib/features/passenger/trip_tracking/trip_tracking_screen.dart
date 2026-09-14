@@ -555,6 +555,28 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
             _passengerPosition,
           );
 
+          // Where the driver is actually heading: the pick-up point until
+          // the passenger is aboard, the destination afterwards.
+          //
+          // The route used to be drawn to `mapCenter`, which is the middle
+          // of the camera — half way between the driver and the passenger,
+          // or the middle of Baliwag when neither was known. That is not a
+          // place anyone is going, so the line ran off to a point on no
+          // road and stayed there.
+          final trip = TripState.fromMap(widget.bookingId, data);
+          final aboard =
+              trip.trip == TripStatus.tripInProgress ||
+              trip.trip == TripStatus.readyToStart;
+          final routePickup = (pLat != null && pLng != null)
+              ? LatLng(pLat, pLng)
+              : null;
+          final routeDestination = (dLat != null && dLng != null)
+              ? LatLng(dLat, dLng)
+              : null;
+          final routeTarget = aboard
+              ? (routeDestination ?? routePickup)
+              : (routePickup ?? _passengerPosition ?? routeDestination);
+
           return Column(
             children: [
               Container(
@@ -683,7 +705,10 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                         initialZoom: 16,
                       ),
                       children: [
-                        AppTileLayer(),
+                        // Full colour: here the map is what the passenger is
+                        // reading — which road the tricycle is on — not a
+                        // backdrop for a route line.
+                        AppTileLayer(muted: false),
                         // Traffic and incidents matter most while you are
                         // actually on the road, so the overlay follows the
                         // trip too.
@@ -692,12 +717,14 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                         // they publish it to. The passenger had no route
                         // line at all before this — only markers — so a
                         // reroute was invisible to them.
-                        if (driverPosition != null)
+                        // No target, no line: a route to nowhere is worse
+                        // than none at all.
+                        if (driverPosition != null && routeTarget != null)
                           TripRouteLayer(
                             bookingId: widget.bookingId,
                             controller: _mapController,
                             from: driverPosition,
-                            to: mapCenter,
+                            to: routeTarget,
                           ),
                         MarkerLayer(markers: markers),
                         GlidingMarkerLayer(

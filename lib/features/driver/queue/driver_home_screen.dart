@@ -8,7 +8,9 @@ import '../../../widgets/map_tiles.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../config/routes.dart';
 import '../../../config/theme.dart';
+import '../../../core/models/location_need.dart';
 import '../../../core/services/geofence_service.dart';
+import '../../../core/services/location_hub.dart';
 import '../../../core/services/dispatch_service.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/utils/date_formatter.dart';
@@ -1655,6 +1657,40 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
   final MapController _mapController = MapController();
   LatLng? _lastDriverPoint;
 
+  /// This phone's own position, straight from GPS.
+  ///
+  /// The map used to draw the driver from `driverLatitude` on the booking —
+  /// which this same phone writes, throttled to one write every couple of
+  /// seconds, and then reads back over the network. On the driver's own
+  /// screen that is a round trip to watch yourself move. The booking is
+  /// still the fallback, for the moments before the first fix arrives.
+  LatLng? _myPosition;
+  StreamSubscription<Position>? _positionSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _positionSub = LocationHub.instance
+        .watch(
+          const LocationNeed(interval: Duration(seconds: 1), distanceFilter: 3),
+        )
+        .listen(
+          (p) {
+            if (mounted) {
+              setState(() => _myPosition = LatLng(p.latitude, p.longitude));
+            }
+          },
+          onError: (Object e) =>
+              debugPrint('Mini map: no position stream ($e)'),
+        );
+  }
+
+  @override
+  void dispose() {
+    _positionSub?.cancel();
+    super.dispose();
+  }
+
   void _recenterOnDriver() {
     if (_lastDriverPoint != null) {
       _mapController.move(_lastDriverPoint!, 15);
@@ -1708,9 +1744,13 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
         }
 
         final pickupPoint = LatLng(pickupLat, pickupLng);
-        final driverPoint = (driverLat != null && driverLng != null)
-            ? LatLng(driverLat, driverLng)
-            : pickupPoint;
+        // Own GPS first: it is this phone's position without waiting for a
+        // write and a read back.
+        final driverPoint =
+            _myPosition ??
+            ((driverLat != null && driverLng != null)
+                ? LatLng(driverLat, driverLng)
+                : pickupPoint);
         final destinationPoint =
             (destinationLat != null && destinationLng != null)
             ? LatLng(destinationLat, destinationLng)

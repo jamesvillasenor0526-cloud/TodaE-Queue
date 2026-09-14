@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -7,7 +9,10 @@ import '../../../config/theme.dart';
 import '../../../config/routes.dart';
 import '../../../core/services/dispatch_service.dart';
 import '../../../core/models/road_report.dart';
+import '../../shared/navigation/gliding_marker_layer.dart';
 import '../../shared/reports/report_map_layer.dart';
+import '../../../core/models/location_need.dart';
+import '../../../core/services/location_hub.dart';
 import '../../shared/reports/report_sheet.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
@@ -32,6 +37,35 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
   LatLng? _userLocation;
   Map<String, double> _terminalDistances = {};
   List<RoadReport> _nearbyReports = const [];
+
+  /// Follows the phone rather than taking one reading, so the passenger can
+  /// see themselves move towards the terminal they are walking to. Before
+  /// this the map only knew where they were if they tapped "nearest
+  /// terminal", and then never again.
+  StreamSubscription<Position>? _positionSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _positionSub = LocationHub.instance
+        .watch(
+          // Coarse on purpose: this is a map of the town, not a
+          // navigation screen, and a walking passenger does not need a
+          // reading a second.
+          const LocationNeed(
+            interval: Duration(seconds: 3),
+            distanceFilter: 10,
+          ),
+        )
+        .listen(
+          (p) {
+            if (!mounted) return;
+            setState(() => _userLocation = LatLng(p.latitude, p.longitude));
+          },
+          onError: (Object e) =>
+              debugPrint('Terminal map: no position stream ($e)'),
+        );
+  }
 
   LatLng? _parseBoundaryPoint(dynamic raw) {
     try {
@@ -212,6 +246,7 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
 
   @override
   void dispose() {
+    _positionSub?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -365,6 +400,12 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
                     },
                   ),
                   MarkerLayer(markers: markers),
+                  // "You are here", gliding between readings rather than
+                  // hopping from one to the next.
+                  GlidingMarkerLayer(
+                    target: _userLocation,
+                    child: const _YouAreHereDot(),
+                  ),
                   const AppMapAttribution(),
                 ],
               );
@@ -687,4 +728,23 @@ class _TerminalSheetState extends State<_TerminalSheet> {
       ),
     );
   }
+}
+
+/// The passenger's own position on the terminal map.
+class _YouAreHereDot extends StatelessWidget {
+  const _YouAreHereDot();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 18,
+    height: 18,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      color: AppTheme.info,
+      border: Border.all(color: Colors.white, width: 3),
+      boxShadow: const [
+        BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 1)),
+      ],
+    ),
+  );
 }

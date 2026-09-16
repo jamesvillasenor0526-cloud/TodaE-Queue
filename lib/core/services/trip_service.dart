@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/trip_state.dart';
 import 'notification_service.dart';
+import 'contact_service.dart';
 import 'receipt_service.dart';
 
 /// Raised when a transition is refused. The message is safe to show a user.
@@ -79,6 +80,17 @@ class TripService {
         ..._tripTimestamps(to),
       });
     });
+
+    // Accepting is the driver introducing themselves: their own number goes
+    // onto the booking, where the passenger — and only the passenger and an
+    // admin — can read it. Nobody reads the user directory for a phone
+    // number any more.
+    if (to == TripStatus.driverAccepted && by == TripRole.driver) {
+      await ContactService.instance.shareNumberOnBooking(
+        bookingId: bookingId,
+        asDriver: true,
+      );
+    }
 
     await _notifyTrip(to);
   }

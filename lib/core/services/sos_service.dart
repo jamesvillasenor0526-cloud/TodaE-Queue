@@ -21,6 +21,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../models/location_need.dart';
 import '../models/sos_alert.dart';
+import 'contact_service.dart';
 import '../models/trip_state.dart';
 import 'location_hub.dart';
 
@@ -404,7 +405,9 @@ class SosService {
       return (
         name: (name == null || name.trim().isEmpty) ? 'Unknown' : name.trim(),
         role: (data['role'] as String?) ?? 'passenger',
-        phone: data['phone'] as String?,
+        // The caller's own number, from their private contact record —
+        // it is no longer on the user document that anyone can read.
+        phone: (await ContactService.instance.of(uid)).phone,
       );
     } catch (_) {
       // An SOS must go out even if the profile cannot be read.
@@ -446,23 +449,24 @@ class SosService {
     final data = booking.data();
     final state = TripState.fromMap(booking.id, data);
 
-    // Both people's phones, so an admin can reach whichever is safe to call.
-    // Bookings carry the driver's number only sometimes (26 of 63) and the
-    // passenger's never, so both come from the profiles.
+    // Both people's phones, so an admin can reach whichever is safe to
+    // call. They come from the booking, where each party writes their own:
+    // nobody — not even in an emergency — reads the other's contact record,
+    // because that access is what exposed every number in the database.
+    // Still read for the plate and body number, which are public and are
+    // what a responder looks for when finding a tricycle.
     final driver = await _userData(state.driverId);
-    final passenger = await _userData(state.passengerId);
 
     return SosTrip(
       bookingId: booking.id,
       driverId: state.driverId,
       driverName: data['driverName'] as String?,
-      driverPhone:
-          (data['driverPhone'] as String?) ?? driver?['phone'] as String?,
+      driverPhone: data['driverPhone'] as String?,
       plateNumber: driver?['plateNumber'] as String?,
       bodyNumber: driver?['bodyNumber'] as String?,
       passengerId: state.passengerId,
       passengerName: data['passengerName'] as String?,
-      passengerPhone: passenger?['phone'] as String?,
+      passengerPhone: data['passengerPhone'] as String?,
       tripStatus: state.trip.wire,
     );
   }

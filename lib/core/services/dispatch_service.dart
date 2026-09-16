@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/queue_rules.dart';
 import '../models/trip_state.dart';
+import 'contact_service.dart';
 import 'fare_service.dart';
 import 'receipt_service.dart';
 
@@ -108,11 +109,10 @@ class DispatchService {
       final candidateRef = candidateDoc.reference;
       final bookingRef = _firestore.collection('bookings').doc();
 
-      final driverDoc = await _firestore
-          .collection('users')
-          .doc(candidateDoc.data()['driverId'])
-          .get();
-      final driverPhone = driverDoc.data()?['phone'] ?? '';
+      // The passenger's own number, put on the booking so the driver can
+      // reach them. Their own — nobody reads anyone else's contact details
+      // any more; the driver adds theirs when they accept.
+      final passengerPhone = (await ContactService.instance.mine()).phone;
 
       try {
         final claimed = await _firestore.runTransaction<bool>((tx) async {
@@ -173,7 +173,11 @@ class DispatchService {
             'declinedBy': declinedBy.toList(),
             'paymentMethod': null,
             'paymentStatus': PaymentState.unpaid.legacyPaymentStatus,
-            'driverPhone': driverPhone,
+            // The driver adds their own number when they accept; until
+            // then Call is unavailable, which is the price of no longer
+            // letting anyone read the user directory.
+            'driverPhone': null,
+            'passengerPhone': passengerPhone,
           });
 
           return true;

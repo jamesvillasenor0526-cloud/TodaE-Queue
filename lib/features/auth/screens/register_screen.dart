@@ -6,6 +6,7 @@ import '../../../config/theme.dart';
 import 'dart:io';
 import 'simple_camera_screen.dart';
 import '../../../core/services/cloudinary_service.dart';
+import '../../../core/services/contact_service.dart';
 import 'package:flutter/services.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -451,7 +452,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   return ListTile(
                     leading: Icon(
                       isSelected ? Icons.check_circle : Icons.location_on,
-                      color: isSelected ? AppTheme.primaryGreen : AppTheme.textMuted,
+                      color: isSelected
+                          ? AppTheme.primaryGreen
+                          : AppTheme.textMuted,
                     ),
                     title: Text(data['name'] ?? 'Terminal'),
                     trailing: isSelected
@@ -539,11 +542,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
         }
       }
 
+      // The public half of the profile. Phone, email, ID photograph and
+      // selfie are deliberately not here — they go to the private
+      // subdocument below, which only this person and an admin can read.
       await FirebaseFirestore.instance.collection('users').doc(uid).set({
         'uid': uid,
         'name': _nameController.text.trim(),
-        'email': _emailController.text.trim(),
-        'phone': _phoneController.text.trim(),
         'locationAddress': _locationAddress ?? '',
         'role': _selectedRole,
         'createdAt': FieldValue.serverTimestamp(),
@@ -557,14 +561,26 @@ class _RegisterScreenState extends State<RegisterScreen> {
           'bodyNumber': _bodyNumberController.text.trim(),
           'idType': _selectedIdType,
           'idNumber': _licenseController.text.trim(),
+          // Whether the documents were supplied is public — an admin's
+          // list needs it — but the photographs themselves are not.
           'hasSelfie': _selfieFile != null,
           'hasIdPhoto': _idPhotoFile != null,
-          'selfieUrl': selfieUrl,
-          'idPhotoUrl': idPhotoUrl,
           'assignedTerminalId': _selectedTerminalId,
           'assignedTerminalName': _selectedTerminalName,
         },
       });
+
+      // Phone, email and the identity photographs: readable by this person
+      // and by the admins who verify them, and by nobody else.
+      await ContactService.instance.save(
+        uid,
+        Contact(
+          phone: _phoneController.text.trim(),
+          email: _emailController.text.trim(),
+          selfieUrl: selfieUrl,
+          idPhotoUrl: idPhotoUrl,
+        ),
+      );
 
       // Send verification email
       // await credential.user!.sendEmailVerification();
@@ -906,7 +922,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         if (terminals.isEmpty) {
                           return const Text(
                             'No terminals available.',
-                            style: TextStyle(color: AppTheme.errorRed, fontSize: 12),
+                            style: TextStyle(
+                              color: AppTheme.errorRed,
+                              fontSize: 12,
+                            ),
                           );
                         }
 
@@ -977,7 +996,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           const SizedBox(height: 8),
                           const Text(
                             'Take a selfie and a photo of your ID for verification.',
-                            style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                            style: TextStyle(
+                              color: AppTheme.textMuted,
+                              fontSize: 12,
+                            ),
                           ),
                           const SizedBox(height: 12),
                           ElevatedButton.icon(

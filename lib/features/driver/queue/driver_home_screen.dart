@@ -36,6 +36,8 @@ import '../../shared/reports/my_reports_screen.dart';
 import '../../shared/sos/sos_button.dart';
 import '../../../core/models/trip_message.dart';
 import '../../../core/models/queue_rules.dart';
+import '../../../core/services/contact_service.dart';
+import '../../shared/profile/my_contact.dart';
 import '../../../core/services/phone_actions.dart';
 import '../../../core/services/rating_service.dart';
 
@@ -2864,8 +2866,8 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
     final uid = FirebaseAuth.instance.currentUser!.uid;
 
     // Pre-fill existing phone
-    FirebaseFirestore.instance.collection('users').doc(uid).get().then((doc) {
-      phoneController.text = doc.data()?['phone'] ?? '';
+    ContactService.instance.mine().then((contact) {
+      phoneController.text = contact.phone ?? '';
     });
 
     showDialog(
@@ -2902,10 +2904,9 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
                 );
                 return;
               }
-              await FirebaseFirestore.instance
-                  .collection('users')
-                  .doc(uid)
-                  .update({'phone': phone});
+              // Into the private record, not the user document every
+              // signed-in account can read.
+              await ContactService.instance.save(uid, Contact(phone: phone));
               if (ctx.mounted) Navigator.pop(ctx);
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -3902,15 +3903,21 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
                   ListTile(
                     leading: const Icon(Icons.email_outlined),
                     title: const Text('Email'),
-                    subtitle: Text(data?['email'] ?? ''),
+                    // Known locally from the signed-in account, rather than
+                    // read back off a document other people can see.
+                    subtitle: Text(
+                      FirebaseAuth.instance.currentUser?.email ?? '',
+                    ),
                   ),
                   const Divider(height: 1, indent: 16, endIndent: 16),
-                  ListTile(
-                    leading: const Icon(Icons.phone_outlined),
-                    title: const Text('Phone'),
-                    subtitle: Text(data?['phone'] ?? ''),
-                    trailing: const Icon(Icons.edit, size: 16),
-                    onTap: () => _showEditPhoneDialog(context),
+                  MyContact(
+                    builder: (context, contact) => ListTile(
+                      leading: const Icon(Icons.phone_outlined),
+                      title: const Text('Phone'),
+                      subtitle: Text(contact.phone ?? 'Not set'),
+                      trailing: const Icon(Icons.edit, size: 16),
+                      onTap: () => _showEditPhoneDialog(context),
+                    ),
                   ),
                   const Divider(height: 1, indent: 16, endIndent: 16),
                   // Edit Location — inside Personal Info
@@ -4386,7 +4393,8 @@ class _PassengerCard extends StatefulWidget {
     required this.onMessage,
   });
 
-  /// The trip whose message thread this card opens.
+  /// The trip whose message thread this card opens, and whose record
+  /// carries the passenger's phone number.
   final String bookingId;
 
   final String? passengerId;
@@ -4400,6 +4408,12 @@ class _PassengerCard extends StatefulWidget {
 class _PassengerCardState extends State<_PassengerCard> {
   late Future<DocumentSnapshot<Map<String, dynamic>>>? _profile = _load();
 
+  /// The passenger's number, taken from the booking — their own app writes
+  /// it there when they book. It used to come from their user record, which
+  /// is how every signed-in account could read all 78 phone numbers in the
+  /// database.
+  String? _phone;
+
   Future<DocumentSnapshot<Map<String, dynamic>>>? _load() {
     final id = widget.passengerId;
     if (id == null || id.isEmpty) return null;
@@ -4407,9 +4421,32 @@ class _PassengerCardState extends State<_PassengerCard> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    _loadPhone();
+  }
+
+  Future<void> _loadPhone() async {
+    if (widget.bookingId.isEmpty) return;
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(widget.bookingId)
+          .get();
+      if (mounted) {
+        setState(() => _phone = snap.data()?['passengerPhone'] as String?);
+      }
+    } catch (e) {
+      // Call simply stays unavailable; the trip is unaffected.
+      debugPrint('Passenger card: no number on the booking ($e)');
+    }
+  }
+
+  @override
   void didUpdateWidget(_PassengerCard old) {
     super.didUpdateWidget(old);
     if (old.passengerId != widget.passengerId) _profile = _load();
+    if (old.bookingId != widget.bookingId) _loadPhone();
   }
 
   @override
@@ -4426,7 +4463,9 @@ class _PassengerCardState extends State<_PassengerCard> {
             ? 'Passenger'
             : rawName;
         final photo = data?['profilePhotoUrl'] as String?;
-        final phone = dialableNumber(data?['phone'] as String?);
+        // From the booking, which the passenger's own app wrote — not from
+        // their user record, which is no longer readable by other people.
+        final phone = dialableNumber(_phone);
 
         return Column(
           children: [

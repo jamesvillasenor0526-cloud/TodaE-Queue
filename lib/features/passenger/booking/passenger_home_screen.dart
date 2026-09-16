@@ -5,6 +5,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../config/routes.dart';
 import '../../../config/theme.dart';
+import '../../../core/services/contact_service.dart';
+import '../../shared/profile/my_contact.dart';
 import '../../../core/services/dispatch_service.dart';
 import '../../../core/services/fare_service.dart';
 import '../../shared/user_profile_screen.dart';
@@ -1627,8 +1629,8 @@ class _ProfileTabState extends State<_ProfileTab> {
     final uid = FirebaseAuth.instance.currentUser!.uid;
 
     // Pre-fill existing phone
-    FirebaseFirestore.instance.collection('users').doc(uid).get().then((doc) {
-      phoneController.text = doc.data()?['phone'] ?? '';
+    ContactService.instance.mine().then((contact) {
+      phoneController.text = contact.phone ?? '';
     });
 
     showDialog(
@@ -1665,10 +1667,9 @@ class _ProfileTabState extends State<_ProfileTab> {
                 );
                 return;
               }
-              await FirebaseFirestore.instance
-                  .collection('users')
-                  .doc(uid)
-                  .update({'phone': phone});
+              // Into the private record, not the user document every
+              // signed-in account can read.
+              await ContactService.instance.save(uid, Contact(phone: phone));
               if (ctx.mounted) Navigator.pop(ctx);
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -2375,7 +2376,7 @@ class _ProfileTabState extends State<_ProfileTab> {
             const SizedBox(height: 1),
             Center(
               child: Text(
-                data?['email'] ?? '',
+                FirebaseAuth.instance.currentUser?.email ?? '',
                 style: const TextStyle(color: AppTheme.textMuted),
               ),
             ),
@@ -2400,15 +2401,21 @@ class _ProfileTabState extends State<_ProfileTab> {
                   ListTile(
                     leading: const Icon(Icons.email_outlined),
                     title: const Text('Email'),
-                    subtitle: Text(data?['email'] ?? ''),
+                    // Known locally from the signed-in account, rather than
+                    // read back off a document other people can see.
+                    subtitle: Text(
+                      FirebaseAuth.instance.currentUser?.email ?? '',
+                    ),
                   ),
                   const Divider(height: 1, indent: 16, endIndent: 16),
-                  ListTile(
-                    leading: const Icon(Icons.phone_outlined),
-                    title: const Text('Phone'),
-                    subtitle: Text(data?['phone'] ?? ''),
-                    trailing: const Icon(Icons.edit, size: 16),
-                    onTap: () => _showEditPhoneDialog(context),
+                  MyContact(
+                    builder: (context, contact) => ListTile(
+                      leading: const Icon(Icons.phone_outlined),
+                      title: const Text('Phone'),
+                      subtitle: Text(contact.phone ?? 'Not set'),
+                      trailing: const Icon(Icons.edit, size: 16),
+                      onTap: () => _showEditPhoneDialog(context),
+                    ),
                   ),
                   const Divider(height: 1, indent: 16, endIndent: 16),
                   // Edit Location — inside Personal Info

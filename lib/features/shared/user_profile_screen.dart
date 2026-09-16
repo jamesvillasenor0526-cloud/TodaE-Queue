@@ -273,19 +273,18 @@ class UserProfileScreen extends StatelessWidget {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      // No phone or email here any more. Someone else's
+                      // contact details are theirs, not a field on a public
+                      // profile — during a trip the Call and Message
+                      // buttons reach them without either side being shown
+                      // the other's number.
                       _ProfileTile(
-                        icon: Icons.phone_outlined,
-                        title: 'Phone',
-                        value: data['phone'] ?? 'N/A',
+                        icon: Icons.verified_user_outlined,
+                        title: 'Verified',
+                        value: data['isVerified'] == true
+                            ? 'Approved by the TODA'
+                            : 'Not yet approved',
                       ),
-                      if (role == 'passenger') ...[
-                        const Divider(height: 1, indent: 16, endIndent: 16),
-                        _ProfileTile(
-                          icon: Icons.email_outlined,
-                          title: 'Email',
-                          value: data['email'] ?? 'N/A',
-                        ),
-                      ],
                       if (role == 'driver') ...[
                         const Divider(height: 1, indent: 16, endIndent: 16),
                         _ProfileTile(

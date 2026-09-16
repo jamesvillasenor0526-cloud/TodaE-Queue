@@ -350,21 +350,17 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
   /// Only 26 of 63 bookings carry the driver's number, and the buttons did
   /// nothing at all without it. They also asked canLaunchUrl first, which
   /// on Android 11+ said no to every number (see phone_actions.dart).
+  /// The driver's number, from the booking — the driver's own app puts it
+  /// there when they accept.
+  ///
+  /// It used to fall back to reading the driver's user record, which is how
+  /// every signed-in account could read all 78 phone numbers in the
+  /// database. There is no fallback now: before the driver accepts, and on
+  /// trips booked by an older version of the app, Call is unavailable and
+  /// says so.
   Future<String?> _driverPhone(Map<String, dynamic> booking) async {
     final onBooking = booking['driverPhone'] as String?;
-    if (dialableNumber(onBooking) != null) return onBooking;
-    final driverId = booking['driverId'] as String?;
-    if (driverId == null || driverId.isEmpty) return null;
-    try {
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(driverId)
-          .get()
-          .timeout(const Duration(seconds: 6));
-      return doc.data()?['phone'] as String?;
-    } catch (_) {
-      return null;
-    }
+    return dialableNumber(onBooking) == null ? null : onBooking;
   }
 
   Future<void> _callDriver(Map<String, dynamic> booking) async {

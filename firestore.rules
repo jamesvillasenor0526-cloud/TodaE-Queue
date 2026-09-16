@@ -89,8 +89,15 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Users — profiles are read across roles (a passenger reads their
-    // driver's GCash QR and phone, and vice versa).
+    // Users — the public half of a profile: name, photo, rating, role,
+    // approval state, and a driver's GCash QR so a passenger can pay them.
+    // Read across roles, because both sides of a trip need to see who they
+    // are dealing with.
+    //
+    // What is NOT here any more: phone, email, ID photo and selfie. Those
+    // moved to the private subdocument below, because every signed-in
+    // account could read all 82 user records — 78 phone numbers and 14
+    // government ID photographs — by asking for the collection.
     match /users/{userId} {
       allow read: if signedIn();
 
@@ -111,6 +118,16 @@ service cloud.firestore {
                     || (isAdmin() && roleChangeAllowed());
 
       allow delete: if false;
+
+      // Phone, email, ID photograph, selfie. The owner and the admins who
+      // verify them — nobody else, ever. A trip's two parties exchange
+      // phone numbers through the booking instead, which only they and an
+      // admin can read.
+      match /private/{docId} {
+        allow read, create, update: if signedIn()
+          && (request.auth.uid == userId || isAdmin());
+        allow delete: if false;
+      }
     }
 
     // A driver's place in a terminal's queue.
@@ -164,7 +181,26 @@ service cloud.firestore {
     }
 
     match /bookings/{bookingId} {
-      allow read: if signedIn();
+      // Read by the two people on the trip and by admins. Every signed-in
+      // account could previously read every booking in the database: who
+      // travelled with whom, from which address to which, and what they
+      // paid. It also has to close before the two parties can exchange
+      // phone numbers through the booking, which is what replaces reading
+      // them out of the user directory.
+      //
+      // Every query the apps make is either a single booking by id or
+      // filtered to the caller's own passengerId or driverId, so nothing
+      // legitimate needs the wider access.
+      allow read: if signedIn()
+        && (resource.data.get('passengerId', '') == request.auth.uid
+            || resource.data.get('driverId', '') == request.auth.uid
+            || isAdmin());
+
+      // Writes stay open, and this is the audit's largest remaining hole:
+      // dispatch is written by the passenger's client into a booking that
+      // does not exist yet, and both apps write different fields on the
+      // same document throughout the trip. Separating a real dispatch from
+      // a forged one needs a Cloud Function.
       allow create, update: if signedIn();
       allow delete: if false;
 

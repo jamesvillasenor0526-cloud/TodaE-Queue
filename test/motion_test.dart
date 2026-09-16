@@ -49,6 +49,48 @@ void main() {
     });
   });
 
+  group('joining the line to the vehicle', () {
+    // The line and the marker used to be worked out from different
+    // positions — the marker from the eased carried-forward one, the line
+    // from the last raw fix — so the line kept detaching from the tricycle
+    // and snapping back. Now the line begins exactly where the marker is.
+    test('the line starts at the vehicle, not at the nearest road point', () {
+      // 8 m to the side of the road, as GPS always is.
+      final beside = distance.offset(straight[3], 8, 0);
+      final line = lineFromVehicle(straight, beside);
+      expect(line.first, beside);
+      expect(line.last, straight.last);
+    });
+
+    test('a vehicle already on the line adds no duplicate point', () {
+      final onIt = lineAhead(straight, straight[3]).first;
+      final line = lineFromVehicle(straight, onIt);
+      expect(line.first, onIt);
+      expect(
+        distance.as(LengthUnit.Meter, line[0], line[1]),
+        greaterThan(1),
+        reason: 'no zero-length first segment',
+      );
+    });
+
+    test('off the route, the join shows the way back to it', () {
+      // Half a kilometre off: the line runs from the vehicle to the road it
+      // should be on, rather than floating unattached.
+      final away = distance.offset(straight[2], 500, 0);
+      final line = lineFromVehicle(straight, away);
+      expect(line.first, away);
+      expect(line.length, straight.length + 1);
+    });
+
+    test('with no position, the whole route is drawn unchanged', () {
+      expect(lineFromVehicle(straight, null), straight);
+    });
+
+    test('nothing to draw stays nothing', () {
+      expect(lineFromVehicle(const [], straight.first), isEmpty);
+    });
+  });
+
   group('carrying a vehicle forward', () {
     test('a stopped vehicle stays where it is', () {
       // GPS speed jitters while parked; projecting it would have a standing

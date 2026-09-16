@@ -19,7 +19,9 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../core/models/live_route.dart';
+import '../../../core/models/motion.dart';
 import '../../../core/services/navigation_service.dart';
+import 'vehicle_position.dart';
 import '../../../core/services/routing_service.dart';
 
 class TripRouteLayer extends StatefulWidget {
@@ -31,6 +33,7 @@ class TripRouteLayer extends StatefulWidget {
     this.color = const Color(0xFF1565C0),
     this.strokeWidth = 5,
     this.controller,
+    this.follows,
   });
 
   final String bookingId;
@@ -45,6 +48,16 @@ class TripRouteLayer extends StatefulWidget {
   /// When given, the camera is moved to frame the whole route each time it
   /// changes, so the driver can actually see where they are being sent.
   final MapController? controller;
+
+  /// Where the vehicle marker is actually drawn, updated every frame by
+  /// [GlidingMarkerLayer].
+  ///
+  /// The line is trimmed from here and joined to it, so it always starts
+  /// under the marker. Without it the two were worked out separately — the
+  /// marker from the eased, carried-forward position, the line from the
+  /// last raw fix — and the line kept detaching from the vehicle and
+  /// snapping back as the two drifted apart between readings.
+  final VehiclePosition? follows;
 
   @override
   State<TripRouteLayer> createState() => _TripRouteLayerState();
@@ -154,36 +167,46 @@ class _TripRouteLayerState extends State<TripRouteLayer> {
         // behind it the whole way. Trimmed here, the line starts under the
         // vehicle and shortens as it goes, on every map, without asking the
         // router for anything.
-        final points = lineAhead(whole, widget.from);
-
         // Frame the route whenever it changes — the whole one, not the
         // trimmed line. Framing what is left would move the camera on every
         // GPS reading, which is the map fighting the person reading it.
         _fitTo(whole);
 
-        if (points.length < 2) return const SizedBox.shrink();
+        final follows = widget.follows;
+        if (follows == null) return _line(lineAhead(whole, widget.from));
 
-        return PolylineLayer(
-          polylines: [
-            // A casing under the line keeps it legible over the traffic
-            // colour, which is painted on the same roads.
-            Polyline(
-              points: points,
-              strokeWidth: widget.strokeWidth + 3,
-              color: Colors.white.withValues(alpha: 0.8),
-              strokeCap: StrokeCap.round,
-              strokeJoin: StrokeJoin.round,
-            ),
-            Polyline(
-              points: points,
-              strokeWidth: widget.strokeWidth,
-              color: widget.color,
-              strokeCap: StrokeCap.round,
-              strokeJoin: StrokeJoin.round,
-            ),
-          ],
+        // Redrawn from wherever the marker is, every frame it moves — and
+        // only this layer redraws, not the map around it.
+        return ValueListenableBuilder<LatLng?>(
+          valueListenable: follows,
+          builder: (context, drawnAt, _) =>
+              _line(lineFromVehicle(whole, drawnAt ?? widget.from)),
         );
       },
+    );
+  }
+
+  Widget _line(List<LatLng> points) {
+    if (points.length < 2) return const SizedBox.shrink();
+    return PolylineLayer(
+      polylines: [
+        // A casing under the line keeps it legible over the traffic
+        // colour, which is painted on the same roads.
+        Polyline(
+          points: points,
+          strokeWidth: widget.strokeWidth + 3,
+          color: Colors.white.withValues(alpha: 0.8),
+          strokeCap: StrokeCap.round,
+          strokeJoin: StrokeJoin.round,
+        ),
+        Polyline(
+          points: points,
+          strokeWidth: widget.strokeWidth,
+          color: widget.color,
+          strokeCap: StrokeCap.round,
+          strokeJoin: StrokeJoin.round,
+        ),
+      ],
     );
   }
 }

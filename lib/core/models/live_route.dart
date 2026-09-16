@@ -145,7 +145,16 @@ List<LatLng> lineAhead(List<LatLng> points, LatLng? position) {
   if (progress == null || progress.offRouteMeters > kOnRouteMeters) {
     return points;
   }
-  return remainingLine(points, progress);
+  final ahead = remainingLine(points, progress);
+  // A vehicle sitting on one of the route's own vertices makes the snapped
+  // point and the next point the same place, so the line opens with a
+  // zero-length segment. Harmless to draw, but it confuses anything that
+  // measures from the start, so drop the repeat.
+  if (ahead.length >= 2 &&
+      const Distance().as(LengthUnit.Meter, ahead[0], ahead[1]) < 1) {
+    return [ahead.first, ...ahead.sublist(2)];
+  }
+  return ahead;
 }
 
 /// [route] from the driver's position onwards, as if fetched from there.

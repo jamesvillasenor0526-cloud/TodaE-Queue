@@ -83,6 +83,26 @@ LatLng lerpAlong(LatLng a, LatLng b, double t) {
   );
 }
 
+/// The route ahead of [at], beginning exactly at [at].
+///
+/// Trimming to what is ahead is not enough on its own: it starts the line
+/// at the nearest point on the road, which is metres away from where the
+/// vehicle is drawn, and at close zoom that gap reads as a broken line.
+/// Joining the two makes the line start under the vehicle.
+///
+/// When the vehicle is off the route altogether, the join is the honest
+/// picture rather than a cosmetic fix: here is you, there is the road you
+/// are meant to be on.
+List<LatLng> lineFromVehicle(List<LatLng> route, LatLng? at) {
+  if (at == null) return route;
+  final ahead = lineAhead(route, at);
+  if (ahead.isEmpty) return ahead;
+  final gap = const Distance().as(LengthUnit.Meter, at, ahead.first);
+  // Under a metre is the same point as far as any map is concerned, and
+  // repeating it would draw a zero-length segment.
+  return gap < 1 ? ahead : [at, ...ahead];
+}
+
 /// Where to draw a vehicle [sinceFix] after its last known position.
 ///
 /// With a route it is on, it is carried along that route at [speed].

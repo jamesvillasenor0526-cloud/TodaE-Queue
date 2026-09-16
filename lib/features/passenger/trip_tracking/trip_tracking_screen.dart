@@ -26,6 +26,7 @@ import '../../shared/reports/report_map_layer.dart';
 import '../../../core/models/trip_message.dart';
 import '../../shared/navigation/gliding_marker_layer.dart';
 import '../../shared/navigation/trip_route_layer.dart';
+import '../../shared/navigation/vehicle_position.dart';
 import '../../../core/services/phone_actions.dart';
 import '../../../widgets/state_views.dart';
 
@@ -111,6 +112,10 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
 
   StreamSubscription<Position>? _positionStream;
 
+  /// Where the driver's marker is drawn, shared with the route line so the
+  /// line always starts under the tricycle instead of drifting off it.
+  final VehiclePosition _driverDrawnAt = VehiclePosition();
+
   /// The driver's published route, for driving their marker along.
   List<LatLng> _publishedRoute = const [];
   StreamSubscription<TripNavigation>? _routeSub;
@@ -141,6 +146,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
 
   @override
   void dispose() {
+    _driverDrawnAt.dispose();
     _positionStream?.cancel();
     _routeSub?.cancel();
     _clock?.cancel();
@@ -748,6 +754,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                             controller: _mapController,
                             from: driverPosition,
                             to: routeTarget,
+                            follows: _driverDrawnAt,
                           ),
                         MarkerLayer(markers: markers),
                         GlidingMarkerLayer(
@@ -760,6 +767,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                           speed: (data['driverSpeed'] as num?)?.toDouble() ?? 0,
                           fixAt: (data['driverLocationAt'] as Timestamp?)
                               ?.toDate(),
+                          reports: _driverDrawnAt,
                           child: GestureDetector(
                             onTap: () {
                               if (driverPosition != null) {

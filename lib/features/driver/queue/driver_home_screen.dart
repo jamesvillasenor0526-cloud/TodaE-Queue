@@ -31,6 +31,7 @@ import '../../shared/reports/report_sheet.dart';
 import '../navigation/navigation_panel.dart';
 import '../../shared/navigation/gliding_marker_layer.dart';
 import '../../shared/navigation/trip_route_layer.dart';
+import '../../shared/navigation/vehicle_position.dart';
 import '../../shared/chat/message_button.dart';
 import '../../shared/reports/my_reports_screen.dart';
 import '../../shared/sos/sos_button.dart';
@@ -1666,6 +1667,9 @@ class MiniMapWidget extends StatefulWidget {
 
 class _MiniMapWidgetState extends State<MiniMapWidget> {
   final MapController _mapController = MapController();
+
+  /// Where the tricycle is drawn, shared with the route line.
+  final VehiclePosition _drawnAt = VehiclePosition();
   LatLng? _lastDriverPoint;
 
   /// This phone's own position, straight from GPS.
@@ -1699,6 +1703,7 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
   @override
   void dispose() {
     _positionSub?.cancel();
+    _drawnAt.dispose();
     super.dispose();
   }
 
@@ -1811,6 +1816,10 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
                       TripRouteLayer(
                         bookingId: widget.bookingId!,
                         controller: _mapController,
+                        // Same drawn position as the marker below, so the
+                        // line starts under the tricycle rather than at a
+                        // point that updates at a different rate.
+                        follows: _drawnAt,
                         from: driverPoint,
                         to: showDestination && destinationPoint != null
                             ? destinationPoint
@@ -1849,6 +1858,7 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
                     // than hopping every couple of seconds.
                     GlidingMarkerLayer(
                       target: driverPoint,
+                      reports: _drawnAt,
                       child: const Icon(
                         Icons.electric_rickshaw,
                         color: AppTheme.primaryBlue,

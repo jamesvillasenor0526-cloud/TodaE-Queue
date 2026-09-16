@@ -24,6 +24,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../core/models/glide.dart';
 import '../../../core/models/motion.dart';
+import 'vehicle_position.dart';
 
 class GlidingMarkerLayer extends StatefulWidget {
   const GlidingMarkerLayer({
@@ -35,7 +36,13 @@ class GlidingMarkerLayer extends StatefulWidget {
     this.route = const [],
     this.speed = 0,
     this.fixAt,
+    this.reports,
   });
+
+  /// Told where the marker is drawn, every frame, so the route line can
+  /// start from exactly the same point instead of working it out again from
+  /// a position that updates at a different rate.
+  final VehiclePosition? reports;
 
   /// The latest reading, or null for no marker.
   final LatLng? target;
@@ -115,7 +122,7 @@ class _GlidingMarkerLayerState extends State<GlidingMarkerLayer>
     _to = target;
     if (target == null || from == null) {
       _motion.stop();
-      setState(() => _shown = target);
+      _show(target);
       return;
     }
     final duration = glideDuration(
@@ -125,7 +132,7 @@ class _GlidingMarkerLayerState extends State<GlidingMarkerLayer>
     );
     if (duration == Duration.zero) {
       _motion.stop();
-      setState(() => _shown = target);
+      _show(target);
       return;
     }
     // From wherever the marker is now — mid-glide if a reading came early —
@@ -143,7 +150,7 @@ class _GlidingMarkerLayerState extends State<GlidingMarkerLayer>
     }
     final from = _from, to = _to;
     if (from == null || to == null) return;
-    setState(() => _shown = lerpLatLng(from, to, _motion.value));
+    _show(lerpLatLng(from, to, _motion.value));
   }
 
   /// How much of the gap to the road position is closed each frame.
@@ -166,15 +173,28 @@ class _GlidingMarkerLayerState extends State<GlidingMarkerLayer>
 
     final shown = _shown;
     if (shown == null) {
-      setState(() => _shown = ought);
+      _show(ought);
       return;
     }
     // A jump this size is a phone coming back after a gap, not movement.
     if (const Distance().as(LengthUnit.Meter, shown, ought) > kMaxGlideMeters) {
-      setState(() => _shown = ought);
+      _show(ought);
       return;
     }
-    setState(() => _shown = lerpLatLng(shown, ought, _catchUpPerFrame));
+    _show(lerpLatLng(shown, ought, _catchUpPerFrame));
+  }
+
+  /// Draws the marker at [at] and tells anything following where that is.
+  void _show(LatLng? at) {
+    setState(() => _shown = at);
+    // After the frame: listeners rebuild, and a notification during build
+    // would be rebuilding a widget that is already building.
+    final reports = widget.reports;
+    if (reports != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) reports.value = at;
+      });
+    }
   }
 
   @override

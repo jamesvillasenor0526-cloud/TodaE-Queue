@@ -122,10 +122,11 @@ class GeocodingService {
 
       debugPrint('🔍 Fetching place name for: $lat, $lng');
 
-      final response = await http.get(
-        Uri.parse(url),
-        headers: {'User-Agent': 'TODA-EQueue/1.0'},
-      );
+      // Timed out rather than left open: a reverse lookup that never
+      // returns leaves "Loading..." as a place name for the whole trip.
+      final response = await http
+          .get(Uri.parse(url), headers: {'User-Agent': 'TODA-EQueue/1.0'})
+          .timeout(const Duration(seconds: 8));
 
       debugPrint('🔍 Response status: ${response.statusCode}');
 

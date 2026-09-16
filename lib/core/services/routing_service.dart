@@ -3,6 +3,15 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+/// How long any single routing request may take before it is given up on.
+///
+/// These calls had no limit at all: on a slow connection the destination
+/// picker sat on 'Calculating Route...' with no cancel and no error, for as
+/// long as the socket stayed open. A caller that times out falls back to a
+/// straight-line estimate, which is worse than a real route and far better
+/// than a screen that never finishes.
+const Duration kRoutingTimeout = Duration(seconds: 10);
+
 class RoutingService {
   static final RoutingService instance = RoutingService._();
   RoutingService._();
@@ -16,7 +25,9 @@ class RoutingService {
           '${end.longitude},${end.latitude}'
           '?overview=full&geometries=geojson';
 
-      final drivingResponse = await http.get(Uri.parse(drivingUrl));
+      final drivingResponse = await http
+          .get(Uri.parse(drivingUrl))
+          .timeout(kRoutingTimeout);
 
       if (drivingResponse.statusCode == 200) {
         final data = json.decode(drivingResponse.body);
@@ -38,7 +49,9 @@ class RoutingService {
           '${end.longitude},${end.latitude}'
           '?overview=full&geometries=geojson';
 
-      final walkingResponse = await http.get(Uri.parse(walkingUrl));
+      final walkingResponse = await http
+          .get(Uri.parse(walkingUrl))
+          .timeout(kRoutingTimeout);
 
       if (walkingResponse.statusCode == 200) {
         final data = json.decode(walkingResponse.body);
@@ -67,7 +80,7 @@ class RoutingService {
           '${end.longitude},${end.latitude}'
           '?overview=false';
 
-      final response = await http.get(Uri.parse(url));
+      final response = await http.get(Uri.parse(url)).timeout(kRoutingTimeout);
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -91,7 +104,9 @@ class RoutingService {
           '${end.longitude},${end.latitude}'
           '?overview=false';
 
-      final response = await http.get(Uri.parse(walkingUrl));
+      final response = await http
+          .get(Uri.parse(walkingUrl))
+          .timeout(kRoutingTimeout);
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);

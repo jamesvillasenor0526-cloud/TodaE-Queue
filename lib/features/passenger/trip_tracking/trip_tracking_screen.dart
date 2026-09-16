@@ -27,6 +27,7 @@ import '../../../core/models/trip_message.dart';
 import '../../shared/navigation/gliding_marker_layer.dart';
 import '../../shared/navigation/trip_route_layer.dart';
 import '../../../core/services/phone_actions.dart';
+import '../../../widgets/state_views.dart';
 
 class TripTrackingScreen extends StatefulWidget {
   final String bookingId;
@@ -415,6 +416,17 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
             .doc(widget.bookingId)
             .snapshots(),
         builder: (context, snapshot) {
+          // A failed listener used to leave a spinner turning with no
+          // message and no way back — signing out on another device, or
+          // losing permission, looked exactly like loading.
+          if (snapshot.hasError) {
+            return ErrorView(
+              message:
+                  "We can't load this trip right now. Check your connection "
+                  'and try again.',
+              onRetry: () => setState(() {}),
+            );
+          }
           if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }

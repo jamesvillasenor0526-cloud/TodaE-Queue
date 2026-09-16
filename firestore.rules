@@ -113,9 +113,53 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // A driver's place in a terminal's queue.
+    //
+    // Fair first-come order is the point of the whole system, so the three
+    // ways it could be rigged are closed here rather than only in the app:
+    //
+    //   * you may only create your own entry, so nobody adds one for
+    //     someone else;
+    //   * checkedInAt must be the server's clock, so nobody backdates
+    //     themselves to the front of the line;
+    //   * an unapproved driver cannot join at all. The app blocks this in
+    //     two places, but a modified client ignored both.
+    //
+    // Updates stay wider than creates on purpose: dispatch is written by
+    // the *passenger's* client into the driver's entry, and until that
+    // moves to a Cloud Function no rule can tell a real dispatch from a
+    // forged one. What it can do is stop a rival cancelling someone's
+    // place, which is the damaging case: only the entry's own driver, or
+    // an admin, may take it out of the queue.
     match /queueEntries/{entryId} {
+      function isApprovedDriver() {
+        return exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid))
+               .data.get('isVerified', false) == true;
+      }
+
+      function mine() {
+        return resource.data.get('driverId', '') == request.auth.uid;
+      }
+
+      // Leaving the queue, or being taken out of it.
+      function givingUpAPlace() {
+        return request.resource.data.get('status', '')
+                 in ['cancelled', 'completed']
+          && resource.data.get('status', '') != request.resource.data.get('status', '');
+      }
+
       allow read: if signedIn();
-      allow create, update: if signedIn();
+
+      allow create: if signedIn()
+        && request.resource.data.driverId == request.auth.uid
+        && isApprovedDriver()
+        && request.resource.data.status == 'waiting'
+        && request.resource.data.checkedInAt == request.time;
+
+      allow update: if signedIn()
+        && (mine() || isAdmin() || !givingUpAPlace());
+
       allow delete: if false;
     }
 
@@ -195,7 +239,14 @@ service cloud.firestore {
     // Creating stays as open as it safely can: an SOS must never be refused
     // for a missing optional field.
     match /sosAlerts/{alertId} {
-      allow read: if signedIn();
+      // Read by the person it is about and by the admins who answer it —
+      // nobody else. Any signed-in account could previously read every
+      // alert in the database, its coordinates and its recorded path,
+      // including silent alerts raised by someone who could not be seen
+      // asking for help. The one feature meant to protect people was
+      // showing an abuser with an account where they were.
+      allow read: if signedIn()
+        && (resource.data.get('userId', '') == request.auth.uid || isAdmin());
 
       allow create: if signedIn()
         && request.resource.data.userId == request.auth.uid
@@ -255,9 +306,33 @@ service cloud.firestore {
       }
     }
 
+    // A receipt is the record of a fare paid. Anyone could previously
+    // write one, or edit an existing one's amount and number.
+    //
+    // Its id is the booking's, so the trip it belongs to is known and both
+    // parties can be checked. Either may bring one into being — the
+    // passenger's screen heals a missing receipt when they open the trip,
+    // the driver's does the same on payment — but once written the amounts
+    // are fixed, and only the driver may mark the money received.
     match /receipts/{receiptId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn();
+      function partyToReceipt() {
+        return bookingOf(receiptId).get('driverId', '') == request.auth.uid
+          || bookingOf(receiptId).get('passengerId', '') == request.auth.uid;
+      }
+
+      allow read: if signedIn() && (partyToReceipt() || isAdmin());
+
+      allow create: if signedIn()
+        && partyToReceipt()
+        && request.resource.data.bookingId == receiptId;
+
+      // Only the driver confirming the money arrived, and nothing else.
+      allow update: if (signedIn()
+          && bookingOf(receiptId).get('driverId', '') == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['driverConfirmed', 'confirmedAt']))
+        || isAdmin();
+
       allow delete: if false;
     }
 
@@ -302,10 +377,24 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Previously missing — this is the fix for support tickets.
+    // Support tickets — often a complaint about another person, sometimes
+    // about harassment. Read by their author and by admins, not by every
+    // signed-in user as before.
     match /tickets/{ticketId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn();
+      allow read: if signedIn()
+        && (resource.data.get('userId', '') == request.auth.uid || isAdmin());
+
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.subject is string
+        && request.resource.data.subject.size() > 0
+        && request.resource.data.subject.size() <= 200
+        && request.resource.data.description is string
+        && request.resource.data.description.size() > 0
+        && request.resource.data.description.size() <= 2000;
+
+      // Answering and closing a ticket is an admin's job.
+      allow update: if isAdmin();
       allow delete: if false;
     }
 

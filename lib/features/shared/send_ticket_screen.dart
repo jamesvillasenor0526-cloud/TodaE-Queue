@@ -6,6 +6,11 @@ import 'package:image_picker/image_picker.dart';
 import '../../../config/theme.dart';
 import '../../../core/services/cloudinary_service.dart';
 
+/// What a ticket may hold, matching the limits in the security rules. A
+/// ticket with no bound is a cheap way to fill a free-tier quota.
+const int kTicketSubjectMax = 200;
+const int kTicketDescriptionMax = 2000;
+
 class SendTicketScreen extends StatefulWidget {
   const SendTicketScreen({super.key});
 
@@ -113,13 +118,17 @@ class _SendTicketScreenState extends State<SendTicketScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Subject
+            // Subject. The limits match the ones the security rules
+            // enforce, so a long ticket is trimmed as it is typed rather
+            // than refused after the send button is pressed.
             TextField(
               controller: _subjectController,
+              maxLength: kTicketSubjectMax,
               decoration: const InputDecoration(
                 labelText: 'Subject',
                 prefixIcon: Icon(Icons.title),
                 hintText: 'e.g., App crashes when booking',
+                counterText: '',
               ),
             ),
             const SizedBox(height: 16),
@@ -128,6 +137,7 @@ class _SendTicketScreenState extends State<SendTicketScreen> {
             TextField(
               controller: _descriptionController,
               maxLines: 5,
+              maxLength: kTicketDescriptionMax,
               decoration: const InputDecoration(
                 labelText: 'Description',
                 prefixIcon: Icon(Icons.description_outlined),

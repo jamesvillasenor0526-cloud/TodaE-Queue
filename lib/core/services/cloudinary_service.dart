@@ -21,7 +21,11 @@ class CloudinaryService {
         ..fields['folder'] = folder
         ..files.add(await http.MultipartFile.fromPath('file', imageFile.path));
 
-      final response = await request.send();
+      // A photo upload with no limit meant registration could sit on a
+      // spinner indefinitely on a weak connection, with no way back.
+      final response = await request.send().timeout(
+        const Duration(seconds: 45),
+      );
       final responseData = await response.stream.bytesToString();
       final jsonResponse = json.decode(responseData);
 

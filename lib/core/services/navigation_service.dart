@@ -30,6 +30,11 @@ import 'traffic_incident_service.dart';
 /// The navigation fields as they appear on the booking document.
 class TripNavigation {
   final List<LatLng> routePoints;
+
+  /// False when the routers could not be reached and [routePoints] is a
+  /// direct line rather than a road route. Maps draw it provisionally so a
+  /// straight line across the fields is never mistaken for a road.
+  final bool routeIsRoad;
   final double? etaSeconds;
   final double? remainingMeters;
   final LatLng? driverLocation;
@@ -39,6 +44,7 @@ class TripNavigation {
 
   const TripNavigation({
     this.routePoints = const [],
+    this.routeIsRoad = true,
     this.etaSeconds,
     this.remainingMeters,
     this.driverLocation,
@@ -82,6 +88,9 @@ class TripNavigation {
 
     return TripNavigation(
       routePoints: points,
+      // Absent on trips routed by an older build: assume a road route, which
+      // is what it was before this could fail visibly.
+      routeIsRoad: data['routeIsRoad'] != false,
       etaSeconds: _toDouble(data['etaSeconds']),
       remainingMeters: _toDouble(data['remainingMeters']),
       driverLocation: (dLat != null && dLng != null)
@@ -585,6 +594,10 @@ class NavigationService {
         'remainingMeters': remaining,
         'etaSeconds': remainingDuration(score, from).inSeconds,
         'etaIsEstimate': score.isEstimate,
+        // False when the routers could not be reached and this is a direct
+        // line rather than a road route, so every map can say so instead of
+        // drawing an invented road in the same confident blue.
+        'routeIsRoad': score.route.isRealRoute,
         'routeUpdatedAt': FieldValue.serverTimestamp(),
         // Cleared by the driver UI once shown, so it is not replayed.
         'rerouteMessage': message,

@@ -161,6 +161,16 @@ class _TripRouteLayerState extends State<TripRouteLayer> {
             ? published.routePoints
             : (_fallback ?? [widget.from, widget.to]);
 
+        // Whether this is a road at all. When the routers cannot be reached
+        // — a slow connection, both services timing out — what is left is a
+        // straight line between two points, and drawing that in the same
+        // solid blue as a real route tells the driver the road runs across
+        // the fields. It happened: a trip showed a confident "20 min, 6.4
+        // km" down a line that followed nothing.
+        final isRoad = usingPublished
+            ? published.routeIsRoad
+            : (_fallback != null && _fallback!.length > 2);
+
         // Only what is still ahead. A route is fetched every so often, not
         // every second, so drawing it whole left a line that never moved
         // while the vehicle did — the marker slid along a line trailing
@@ -173,20 +183,24 @@ class _TripRouteLayerState extends State<TripRouteLayer> {
         _fitTo(whole);
 
         final follows = widget.follows;
-        if (follows == null) return _line(lineAhead(whole, widget.from));
+        if (follows == null) {
+          return _line(lineAhead(whole, widget.from), isRoad: isRoad);
+        }
 
         // Redrawn from wherever the marker is, every frame it moves — and
         // only this layer redraws, not the map around it.
         return ValueListenableBuilder<LatLng?>(
           valueListenable: follows,
-          builder: (context, drawnAt, _) =>
-              _line(lineFromVehicle(whole, drawnAt ?? widget.from)),
+          builder: (context, drawnAt, _) => _line(
+            lineFromVehicle(whole, drawnAt ?? widget.from),
+            isRoad: isRoad,
+          ),
         );
       },
     );
   }
 
-  Widget _line(List<LatLng> points) {
+  Widget _line(List<LatLng> points, {bool isRoad = true}) {
     if (points.length < 2) return const SizedBox.shrink();
     return PolylineLayer(
       polylines: [
@@ -199,10 +213,16 @@ class _TripRouteLayerState extends State<TripRouteLayer> {
           strokeCap: StrokeCap.round,
           strokeJoin: StrokeJoin.round,
         ),
+        // A direct line is drawn dashed and muted: it is the direction of
+        // travel, not a road. Solid blue would claim the tricycle drives
+        // across whatever lies between.
         Polyline(
           points: points,
-          strokeWidth: widget.strokeWidth,
-          color: widget.color,
+          strokeWidth: isRoad ? widget.strokeWidth : widget.strokeWidth - 1,
+          color: isRoad ? widget.color : widget.color.withValues(alpha: 0.55),
+          pattern: isRoad
+              ? const StrokePattern.solid()
+              : StrokePattern.dashed(segments: const [12, 10]),
           strokeCap: StrokeCap.round,
           strokeJoin: StrokeJoin.round,
         ),

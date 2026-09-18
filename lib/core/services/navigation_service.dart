@@ -306,7 +306,6 @@ class NavigationService {
     // Leaving the route recalculates immediately; otherwise this is a
     // periodic check, so a reroute is never triggered by GPS jitter alone.
     if (!wentOffRoute && !due) return RerouteReason.none;
-    _lastRecalc = now;
 
     final conditions = await _conditionsNear(position);
     // Re-score what is being driven against the conditions reported since it
@@ -328,10 +327,27 @@ class NavigationService {
       heading: heading,
       speed: speed,
     );
-    if (scored.isEmpty) return RerouteReason.none;
+    // Nothing came back — the routers could not be reached. Do not record
+    // this as a recalculation: a driver who has left the route would then
+    // be left on a route they are not driving until the next periodic
+    // check, three quarters of a minute later, while the attempt that
+    // failed is treated as though it had happened. Returning without
+    // stamping the clock means the next fix tries again.
+    //
+    // A driver who has left the route is told so even when nothing came
+    // back: "Recalculating" is true, and silence while the line still shows
+    // a road they are not on is not. The guide says it once per spell off
+    // the route, not once per attempt.
+    if (scored.isEmpty) {
+      return wentOffRoute ? RerouteReason.offRoute : RerouteReason.none;
+    }
 
     final choices = buildChoices(scored, maxShared: kMaxSharedWithRecommended);
     if (choices == null) return RerouteReason.none;
+
+    // A real attempt was made and produced candidates; from here the
+    // periodic interval applies again.
+    _lastRecalc = now;
     // Refresh what the driver can switch to, so the options panel reflects
     // conditions now rather than when the leg started.
     _choices = choices;

@@ -793,8 +793,16 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                       child: FloatingActionButton.small(
                         backgroundColor: Colors.white,
                         tooltip: 'Recenter',
+                        // On the tricycle — the thing being tracked. It used
+                        // to go to the midpoint between the driver and the
+                        // passenger, which landed on neither of them.
                         onPressed: () {
-                          _mapController.move(mapCenter, 16);
+                          _mapController.move(
+                            _driverDrawnAt.value ??
+                                driverPosition ??
+                                mapCenter,
+                            16,
+                          );
                         },
                         child: const Icon(
                           Icons.my_location,

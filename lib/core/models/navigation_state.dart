@@ -732,9 +732,12 @@ const double kMinRerouteFraction = 0.15;
 
 /// How far off the line counts as having left the route.
 ///
-/// Generous, because urban GPS drifts and a tricycle may legitimately pull
-/// to the side of the road.
-const double kOffRouteMeters = 60;
+/// Thirty metres: about the width of a block's worth of side street, so a
+/// driver who turns off is recalculated for within a few seconds. It was 60,
+/// which let a driver get well down another street before a new route was
+/// found. GPS scatter is still covered by [kOffRouteFixes] — one wild
+/// reading beyond this does not count, three in a row do.
+const double kOffRouteMeters = 30;
 
 /// Consecutive off-route fixes required before recalculating, so one bad
 /// GPS reading does not trigger a reroute.

@@ -99,8 +99,9 @@ void main() {
 
   group('a driver who takes a different road', () {
     // The route runs north. The driver turns onto the next street over —
-    // 40 m to the east, well inside the 60 m the detector calls "on the
-    // route" — and drives north along that instead. By distance alone they
+    // 28 m to the east, inside the 30 m the detector calls "on the route"
+    // but in the drifting band above 25 m — and drives north along that
+    // instead. By distance alone they
     // never left it, so the map went on showing the first way while they
     // drove another. What gives them away is that they stop getting any
     // closer to the end of the route they are supposed to be on.
@@ -113,11 +114,11 @@ void main() {
       // Setting off along the route proper, for reference.
       expect(detector.update(route, here, heading: 0, speed: driving), isFalse);
 
-      // Now on the parallel street, heading the same way, 40 m to the side.
+      // Now on the parallel street, heading the same way, 28 m to the side.
       var left = false;
       for (var i = 1; i <= 8; i++) {
         final on = LatLng(here.latitude + i * 0.0002, here.longitude);
-        final beside = distance.offset(on, 40, 90);
+        final beside = distance.offset(on, 28, 90);
         if (detector.update(route, beside, heading: 0, speed: driving)) {
           left = true;
           break;

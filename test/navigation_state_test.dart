@@ -1214,6 +1214,23 @@ void main() {
       expect(d.update(_route(), far), isTrue);
     });
 
+    test('thirty metres off, for three readings, finds a new route', () {
+      final d = OffRouteDetector();
+      // North, to the side: the route runs east.
+      final off = const Distance().offset(_onRoute, 35, 0);
+      expect(d.update(_route(), off), isFalse);
+      expect(d.update(_route(), off), isFalse);
+      expect(d.update(_route(), off), isTrue);
+    });
+
+    test('inside thirty metres is still on the route', () {
+      final d = OffRouteDetector();
+      final beside = const Distance().offset(_onRoute, 15, 0);
+      for (var i = 0; i < 6; i++) {
+        expect(d.update(_route(), beside), isFalse, reason: 'reading $i');
+      }
+    });
+
     test('it rearms after firing rather than firing every fix', () {
       final d = OffRouteDetector();
       final far = LatLng(_onRoute.latitude + 0.002, _onRoute.longitude);

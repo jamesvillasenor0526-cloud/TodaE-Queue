@@ -73,13 +73,21 @@ void main() {
       );
     });
 
-    test('off the route, the join shows the way back to it', () {
-      // Half a kilometre off: the line runs from the vehicle to the road it
-      // should be on, rather than floating unattached.
+    test('off the route, the join goes to the nearest point on it', () {
+      // Half a kilometre off, beside the third point: the line runs from
+      // the vehicle to the road it should be on, rather than floating
+      // unattached.
       final away = distance.offset(straight[2], 500, 0);
       final line = lineFromVehicle(straight, away);
       expect(line.first, away);
-      expect(line.length, straight.length + 1);
+      // Straight to the nearest point — not back to the route's start,
+      // which drew a long straight line across the map before the line
+      // began following the road.
+      expect(
+        distance.as(LengthUnit.Meter, line[1], straight[2]),
+        lessThan(5),
+      );
+      expect(line.last, straight.last);
     });
 
     test('with no position, the whole route is drawn unchanged', () {

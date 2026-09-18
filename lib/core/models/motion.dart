@@ -134,12 +134,30 @@ List<LatLng> lineFromVehicle(List<LatLng> route, LatLng? at) =>
 }) {
   if (at == null) return (line: route, segment: hint);
   final progress = progressAlong(route, at, hint: hint);
-  final ahead = lineAhead(route, at, hint: hint);
-  if (ahead.isEmpty) return (line: ahead, segment: progress?.segment);
+  if (progress == null) return (line: route, segment: hint);
+
+  // Always from the nearest point on the route, however far off the
+  // vehicle is.
+  //
+  // This used to hand back the *whole* route once the vehicle was more than
+  // [kOnRouteMeters] away, and the join below then ran from the vehicle to
+  // the route's first point — which could be a kilometre or more back, at
+  // the terminal or wherever the route was last fetched from. The result
+  // was a long straight line across the map, and the road-following part
+  // only beginning where that straight line happened to reach the start.
+  // Joining to the nearest point instead gives the shortest honest link:
+  // here is the vehicle, here is the closest point on the road it should be
+  // on, and the route onwards from there.
+  var ahead = remainingLine(route, progress);
+  if (ahead.length >= 2 &&
+      const Distance().as(LengthUnit.Meter, ahead[0], ahead[1]) < 1) {
+    ahead = [ahead.first, ...ahead.sublist(2)];
+  }
+  if (ahead.isEmpty) return (line: ahead, segment: progress.segment);
   final gap = const Distance().as(LengthUnit.Meter, at, ahead.first);
   // Under a metre is the same point as far as any map is concerned, and
   // repeating it would draw a zero-length segment.
-  return (line: gap < 1 ? ahead : [at, ...ahead], segment: progress?.segment);
+  return (line: gap < 1 ? ahead : [at, ...ahead], segment: progress.segment);
 }
 
 /// Where to draw a vehicle [sinceFix] after its last known position.

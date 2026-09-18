@@ -30,6 +30,13 @@ import '../../shared/navigation/vehicle_position.dart';
 import '../../../core/services/phone_actions.dart';
 import '../../../widgets/state_views.dart';
 
+/// How far the passenger has to move before their own dot is redrawn.
+///
+/// They are usually standing still waiting, and a redraw rebuilds the whole
+/// screen. Ten metres is a step or two of real movement rather than GPS
+/// wandering on the spot.
+const double kPassengerMovedMeters = 10;
+
 class TripTrackingScreen extends StatefulWidget {
   final String bookingId;
   final String driverName;
@@ -139,7 +146,13 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
       if (!mounted || nav.routePoints.length < 2) return;
       setState(() => _publishedRoute = nav.routePoints);
     }, onError: (Object e) => debugPrint('Tracking: no published route ($e)'));
-    _clock = Timer.periodic(const Duration(seconds: 5), (_) {
+    // Slow on purpose. This rebuilds the entire screen — map, tiles, every
+    // card — and the only things that need it are the stale-driver warning
+    // and the "your driver hasn't answered" prompt, which are about
+    // fifteen seconds and ninety seconds respectively. The line "updated N
+    // s ago" keeps its own time (see _LiveAgeText), so it stays accurate
+    // without dragging the map through a rebuild every five seconds.
+    _clock = Timer.periodic(const Duration(seconds: 15), (_) {
       if (mounted) setState(() {});
     });
   }
@@ -201,11 +214,20 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
           const LocationNeed(interval: Duration(seconds: 2), distanceFilter: 5),
         )
         .listen((Position p) {
-          if (mounted) {
-            setState(
-              () => _passengerPosition = LatLng(p.latitude, p.longitude),
-            );
+          if (!mounted) return;
+          final at = LatLng(p.latitude, p.longitude);
+          // A passenger waiting for a tricycle is standing still, and GPS
+          // wanders a few metres while they do. Rebuilding this whole
+          // screen — map, tiles, every card — for that wander, twice a
+          // second, is most of what made the screen feel rough. Their own
+          // dot only matters when they have actually moved.
+          final last = _passengerPosition;
+          if (last != null &&
+              const Distance().as(LengthUnit.Meter, last, at) <
+                  kPassengerMovedMeters) {
+            return;
           }
+          setState(() => _passengerPosition = at);
         });
   }
 
@@ -981,15 +1003,11 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                                     fontWeight: FontWeight.w500,
                                   ),
                                 ),
-                                if (hasDriverLocation && driverAge != null)
-                                  Text(
-                                    driverAge.text,
-                                    style: TextStyle(
-                                      color: driverAge.stale
-                                          ? AppTheme.warning
-                                          : AppTheme.textMuted,
-                                      fontSize: 11,
-                                    ),
+                                if (hasDriverLocation)
+                                  _LiveAgeText(
+                                    measuredAt:
+                                        (data['driverLocationAt'] as Timestamp?)
+                                            ?.toDate(),
                                   ),
                               ],
                             ),
@@ -1212,4 +1230,56 @@ class _RatingDialogState extends State<_RatingDialog> {
       ),
     ],
   );
+}
+
+/// "Driver location live · updated 4 s ago", keeping its own time.
+///
+/// This line ages whether or not anything arrives, so it used to be redrawn
+/// by a timer on the whole screen — rebuilding the map and every card twice
+/// a minute for one line of text. Ticking here costs a paragraph.
+class _LiveAgeText extends StatefulWidget {
+  const _LiveAgeText({required this.measuredAt});
+
+  /// When the driver's phone took the reading, or null when it did not say.
+  final DateTime? measuredAt;
+
+  @override
+  State<_LiveAgeText> createState() => _LiveAgeTextState();
+}
+
+class _LiveAgeTextState extends State<_LiveAgeText> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final at = widget.measuredAt;
+    if (at == null) return const SizedBox.shrink();
+    final age = DateTime.now().difference(at);
+    final safeAge = age.isNegative ? Duration.zero : age;
+    final stale = safeAge > kDriverLocationStale;
+    return Text(
+      stale
+          ? "Driver's location last updated ${fixAgeLabel(safeAge)} — "
+                'their phone may have lost signal'
+          : 'Driver location live · updated ${fixAgeLabel(safeAge)}',
+      style: TextStyle(
+        color: stale ? AppTheme.warning : AppTheme.textMuted,
+        fontSize: 11,
+      ),
+    );
+  }
 }

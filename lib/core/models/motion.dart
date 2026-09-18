@@ -160,8 +160,17 @@ List<LatLng> lineFromVehicle(List<LatLng> route, LatLng? at) =>
   if (!speed.isFinite || speed < kMovingAtLeast) return still;
   if (sinceFix <= Duration.zero) return still;
 
+  // Only carry a vehicle along the road when it is genuinely on it.
+  //
+  // This used the distance the *line* is trimmed at — 150 m — which is far
+  // too generous for moving the vehicle itself: a tricycle a hundred metres
+  // away, on another street, was drawn sliding along the main route instead
+  // of where it actually was. The route then looked right and the driver
+  // looked wrong. Thirty metres is the same distance at which the driver's
+  // own arrow snaps to the road, and beyond it the honest answer is the
+  // position the phone reported.
   final progress = progressAlong(route, lastFix);
-  if (progress == null || progress.offRouteMeters > kOnRouteMeters) {
+  if (progress == null || progress.offRouteMeters > kSnapToRoadMeters) {
     return still;
   }
 

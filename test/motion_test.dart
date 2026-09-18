@@ -229,6 +229,35 @@ void main() {
       expect(past.at, straight.last);
     });
 
+    test(
+      'a vehicle near the road is put on it; one on another street is not',
+      () {
+        // The threshold that matters: carrying a vehicle along the route is
+        // only honest when it is on the route. Using the line-trimming
+        // distance here drew a tricycle a hundred metres away sliding along
+        // the main road instead of down the street it had taken.
+        final justOff = distance.offset(straight[3], 10, 0);
+        final onAnotherStreet = distance.offset(straight[3], 60, 0);
+        LatLng moving(LatLng at) => carriedForward(
+          lastFix: at,
+          sinceFix: const Duration(seconds: 2),
+          speed: 8,
+          route: straight,
+        ).at;
+
+        expect(
+          moving(justOff),
+          isNot(justOff),
+          reason: '10 m off: close enough to follow the road',
+        );
+        expect(
+          moving(onAnotherStreet),
+          onAnotherStreet,
+          reason: '60 m off: drawn where the phone says it is',
+        );
+      },
+    );
+
     test('a vehicle off the route is drawn where it actually is', () {
       // Half a kilometre away: there is no road here to carry it along, and
       // guessing would put it on a road it has left.

@@ -117,7 +117,14 @@ class _TripRouteLayerState extends State<TripRouteLayer> {
     final controller = widget.controller;
     if (controller == null || points.length < 2) return;
 
-    final key = '${points.length}:${points.first}:${points.last}';
+    // Once per leg, not once per route.
+    //
+    // Navigation republishes the route every few seconds, and re-framing on
+    // each one zoomed the map in and out under the reader — the "it enlarges
+    // when it refreshes" of a recorded trip. The camera now settles when the
+    // line first appears and when the driver starts a new leg, and otherwise
+    // stays where the person watching left it.
+    final key = '${widget.to}';
     if (key == _framed) return;
     _framed = key;
 

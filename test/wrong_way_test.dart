@@ -97,6 +97,65 @@ void main() {
     });
   });
 
+  group('a driver who takes a different road', () {
+    // The route runs north. The driver turns onto the next street over —
+    // 40 m to the east, well inside the 60 m the detector calls "on the
+    // route" — and drives north along that instead. By distance alone they
+    // never left it, so the map went on showing the first way while they
+    // drove another. What gives them away is that they stop getting any
+    // closer to the end of the route they are supposed to be on.
+    const distance = Distance();
+
+    test('is noticed, even while within the on-route distance', () {
+      final route = northFrom(here);
+      final detector = OffRouteDetector();
+
+      // Setting off along the route proper, for reference.
+      expect(detector.update(route, here, heading: 0, speed: driving), isFalse);
+
+      // Now on the parallel street, heading the same way, 40 m to the side.
+      var left = false;
+      for (var i = 1; i <= 8; i++) {
+        final on = LatLng(here.latitude + i * 0.0002, here.longitude);
+        final beside = distance.offset(on, 40, 90);
+        if (detector.update(route, beside, heading: 0, speed: driving)) {
+          left = true;
+          break;
+        }
+      }
+      expect(left, isTrue, reason: 'never noticed the driver had turned off');
+    });
+
+    test('a driver following the route is left alone', () {
+      final route = northFrom(here);
+      final detector = OffRouteDetector();
+      for (var i = 0; i <= 15; i++) {
+        // Along the line, with the few metres of GPS scatter any phone has.
+        final on = LatLng(here.latitude + i * 0.0002, here.longitude);
+        final scattered = distance.offset(on, 6, i.isEven ? 90 : 270);
+        expect(
+          detector.update(route, scattered, heading: 0, speed: driving),
+          isFalse,
+          reason: 'reading $i',
+        );
+      }
+    });
+
+    test('sitting in traffic on the route is not leaving it', () {
+      // Stopped at a junction: no progress, but no travel either, so there
+      // is nothing to judge and nothing to recalculate.
+      final route = northFrom(here);
+      final detector = OffRouteDetector();
+      for (var i = 0; i < 20; i++) {
+        expect(
+          detector.update(route, here, heading: 0, speed: 0),
+          isFalse,
+          reason: 'reading $i',
+        );
+      }
+    });
+  });
+
   group('the off-route detector', () {
     test('driving against the route on its own road counts as leaving it', () {
       // On the line — 0 m off — but going the other way.

@@ -740,6 +740,40 @@ const double kOffRouteMeters = 60;
 /// GPS reading does not trigger a reroute.
 const int kOffRouteFixes = 3;
 
+/// A smaller distance that only counts when it lasts.
+///
+/// Between GPS scatter and a genuinely different street lies a band —
+/// twenty-five to sixty metres — where one reading proves nothing and ten
+/// in a row prove a great deal. A phone on the route wanders in and out of
+/// that band; a tricycle on the next street over sits in it the whole way,
+/// which is why a route could go on insisting on the first way while the
+/// driver drove another.
+const double kDriftingOffMeters = 25;
+
+/// How many consecutive readings in that band count as a different road.
+/// At a reading a second this is about eight seconds.
+const int kDriftingFixes = 8;
+
+/// How far the driver must travel before their progress along the route is
+/// judged.
+///
+/// Distance from the line is not enough on its own. A driver who turns onto
+/// the next street over stays within [kOffRouteMeters] of the route for a
+/// long way in a town laid out in blocks, and a route that doubles back
+/// passes close to them again later — so by proximity alone they never
+/// left it, and the map goes on showing the first way while they drive
+/// another. Whether they are actually getting closer to the destination
+/// along *this* route answers it properly.
+const double kProgressCheckMeters = 50;
+
+/// How much of that travel must show up as progress along the route.
+///
+/// Well under half: a driver on the route but stuck in traffic, or one
+/// whose GPS is noisy, still counts as following it. A driver on a
+/// different road makes little or no progress along this one — and may go
+/// backwards along it, which is negative.
+const double kMinProgressShare = 0.35;
+
 /// Moving at least this fast (m/s, about 11 km/h), the GPS course is the way
 /// the driver is actually going. Slower, it wanders, and standing still it
 /// says nothing at all.
@@ -876,13 +910,29 @@ double? distanceFromRoute(NavRoute route, LatLng position) =>
 class OffRouteDetector {
   int _consecutive = 0;
 
+  /// Consecutive readings sitting in the band between scatter and a
+  /// different street — see [kDriftingOffMeters].
+  int _drifting = 0;
+
+  /// Where the driver was, and how far was left to drive, when progress was
+  /// last judged — see [kProgressCheckMeters].
+  LatLng? _judgedAt;
+  double? _judgedRemaining;
+
   /// Feeds one position. Returns true when the driver should be considered
   /// off-route and the route recalculated.
   ///
-  /// Travelling against the route counts as leaving it, even on the line
-  /// itself. A driver who has turned round — or never faced the route's way
-  /// — is on its road but not following it, and waiting until they were
-  /// 60 m clear took the recorded drive 25 s to recalculate.
+  /// Three ways to have left it:
+  ///
+  ///   * too far from the line for [kOffRouteFixes] readings in a row;
+  ///   * travelling against it, even while on its road — a driver who has
+  ///     turned round is not following it, and waiting until they were 60 m
+  ///     clear took a recorded drive 25 s to recalculate;
+  ///   * travelling without making progress along it. A driver who turns
+  ///     onto the next street over stays within 60 m of the route for a
+  ///     long way in a town laid out in blocks, so by distance alone they
+  ///     never left — and the map went on insisting on the first way while
+  ///     they drove another.
   bool update(
     NavRoute route,
     LatLng position, {
@@ -891,24 +941,81 @@ class OffRouteDetector {
   }) {
     final offset = distanceFromRoute(route, position);
     if (offset == null) return false;
+
+    // How far is left to drive; getting smaller is what following the route
+    // means. Judged only while the driver still looks like they are on it:
+    // this rule exists to catch the close-but-wrong-road case, and a wild
+    // GPS spike two hundred metres away is movement without progress too —
+    // the distance rules below are what should answer that, after the
+    // readings they need to tell a spike from a departure.
+    if (offset <= kOffRouteMeters &&
+        _notProgressing(position, remainingMeters(route, position))) {
+      return _fire();
+    }
+
     final against = isAgainstRoute(
       heading: heading,
       speed: speed,
       roadBearing: routeDirectionNear(route.points, position),
     );
+    // Sitting well off the line, reading after reading: not scatter, a
+    // different road. Counted separately from the gross departure above so
+    // one rule can be forgiving and quick while the other is strict and
+    // patient.
+    if (offset > kDriftingOffMeters) {
+      _drifting++;
+      if (_drifting >= kDriftingFixes) return _fire();
+    } else {
+      _drifting = 0;
+    }
+
     if (offset <= kOffRouteMeters && !against) {
       _consecutive = 0;
       return false;
     }
     _consecutive++;
-    if (_consecutive >= kOffRouteFixes) {
-      _consecutive = 0;
-      return true;
-    }
+    if (_consecutive >= kOffRouteFixes) return _fire();
     return false;
   }
 
-  void reset() => _consecutive = 0;
+  /// Whether the driver has covered ground without getting any closer to
+  /// the end of this route.
+  ///
+  /// [remaining] is how far is left along the route from where they are.
+  /// Driving it shrinks that by about as much as they travel; driving a
+  /// different road shrinks it by little, and driving away from it grows
+  /// it, which reads as negative progress.
+  bool _notProgressing(LatLng position, double remaining) {
+    final from = _judgedAt, before = _judgedRemaining;
+    if (from == null || before == null) {
+      _judgedAt = position;
+      _judgedRemaining = remaining;
+      return false;
+    }
+
+    final moved = const Distance().as(LengthUnit.Meter, from, position);
+    if (moved < kProgressCheckMeters) return false;
+
+    final gained = before - remaining;
+    _judgedAt = position;
+    _judgedRemaining = remaining;
+    return gained < moved * kMinProgressShare;
+  }
+
+  bool _fire() {
+    _consecutive = 0;
+    _drifting = 0;
+    _judgedAt = null;
+    _judgedRemaining = null;
+    return true;
+  }
+
+  void reset() {
+    _consecutive = 0;
+    _drifting = 0;
+    _judgedAt = null;
+    _judgedRemaining = null;
+  }
 }
 
 /// Remaining distance along [route] from the driver's current position.

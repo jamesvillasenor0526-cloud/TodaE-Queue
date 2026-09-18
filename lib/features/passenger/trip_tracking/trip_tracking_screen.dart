@@ -21,7 +21,6 @@ import '../../../core/services/location_hub.dart';
 import '../../../core/services/receipt_service.dart';
 import '../../../core/services/trip_service.dart';
 import '../../shared/chat/message_button.dart';
-import '../../../core/services/navigation_service.dart';
 import '../../shared/reports/report_map_layer.dart';
 import '../../../core/models/trip_message.dart';
 import '../../shared/navigation/gliding_marker_layer.dart';
@@ -122,10 +121,6 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
   /// Where the driver's marker is drawn, shared with the route line so the
   /// line always starts under the tricycle instead of drifting off it.
   final VehiclePosition _driverDrawnAt = VehiclePosition();
-
-  /// The driver's published route, for driving their marker along.
-  List<LatLng> _publishedRoute = const [];
-  StreamSubscription<TripNavigation>? _routeSub;
   LatLng? _passengerPosition;
   final MapController _mapController = MapController();
 
@@ -137,15 +132,6 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
     super.initState();
     _startPassengerLocationUpdates();
     _loadPassengerLastLocation();
-    // The road the driver is actually on, as their navigation publishes it.
-    // Used to carry the tricycle along that road between position updates,
-    // so it moves like a vehicle rather than hopping every two seconds.
-    _routeSub = NavigationService.instance.watch(widget.bookingId).listen((
-      nav,
-    ) {
-      if (!mounted || nav.routePoints.length < 2) return;
-      setState(() => _publishedRoute = nav.routePoints);
-    }, onError: (Object e) => debugPrint('Tracking: no published route ($e)'));
     // Slow on purpose. This rebuilds the entire screen — map, tiles, every
     // card — and the only things that need it are the stale-driver warning
     // and the "your driver hasn't answered" prompt, which are about
@@ -161,7 +147,6 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
   void dispose() {
     _driverDrawnAt.dispose();
     _positionStream?.cancel();
-    _routeSub?.cancel();
     _clock?.cancel();
     super.dispose();
   }
@@ -781,14 +766,6 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                         MarkerLayer(markers: markers),
                         GlidingMarkerLayer(
                           target: driverPosition,
-                          // With the road and the speed, the tricycle is
-                          // driven along it between updates instead of
-                          // being dragged from one two-second-old dot to
-                          // the next.
-                          route: _publishedRoute,
-                          speed: (data['driverSpeed'] as num?)?.toDouble() ?? 0,
-                          fixAt: (data['driverLocationAt'] as Timestamp?)
-                              ?.toDate(),
                           reports: _driverDrawnAt,
                           child: GestureDetector(
                             onTap: () {

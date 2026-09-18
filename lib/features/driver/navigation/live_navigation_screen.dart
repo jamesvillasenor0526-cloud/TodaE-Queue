@@ -25,7 +25,6 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../../config/routes.dart';
 import '../../../config/theme.dart';
-import '../../../core/models/glide.dart';
 import '../../../core/models/live_route.dart';
 import '../../../core/models/navigation_state.dart';
 import '../../../core/models/trip_state.dart';
@@ -41,10 +40,6 @@ const double _followZoom = 17;
 /// Where the driver sits on screen while following: below centre, so more of
 /// the road ahead is visible than behind, as every navigation app does.
 const double _driverScreenOffset = 0.22;
-
-/// How long the arrow takes to swing round to a new heading when only the
-/// heading has changed — after a re-route, say — and it is not moving.
-const Duration _turn = Duration(milliseconds: 500);
 
 const Color _routeBlue = Color(0xFF1A73E8);
 const Color _altBlue = Color(0xFF8AB4F8);
@@ -65,21 +60,18 @@ class LiveNavigationScreen extends StatefulWidget {
 
 enum _Camera { follow, overview, free }
 
-class _LiveNavigationScreenState extends State<LiveNavigationScreen>
-    with SingleTickerProviderStateMixin {
+class _LiveNavigationScreenState extends State<LiveNavigationScreen> {
   final LiveNavigation _nav = LiveNavigation.instance;
   final MapController _map = MapController();
-  late final AnimationController _anim;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _booking;
 
   bool _mapReady = false;
   _Camera _camera = _Camera.follow;
   bool _headingUp = true;
 
-  // The arrow glides between readings rather than jumping.
-  LatLng? _fromPos, _toPos, _shownPos;
-  double _fromHeading = 0, _toHeading = 0, _shownHeading = 0;
-  DateTime? _lastReading;
+  // Where the arrow is drawn: the latest reading, as-is.
+  LatLng? _shownPos;
+  double _shownHeading = 0;
 
   // Label positions, worked out once per set of routes.
   String? _anchorsFor;
@@ -88,8 +80,6 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
   @override
   void initState() {
     super.initState();
-    _anim = AnimationController(vsync: this, duration: _turn)
-      ..addListener(_onFrame);
     _nav.holdExisting();
     _nav.addListener(_onNav);
     _onNav();
@@ -104,7 +94,6 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
     _booking?.cancel();
     _nav.removeListener(_onNav);
     _nav.release();
-    _anim.dispose();
     super.dispose();
   }
 
@@ -130,62 +119,15 @@ class _LiveNavigationScreenState extends State<LiveNavigationScreen>
   // ---- Motion ------------------------------------------------------------
 
   void _onNav() {
-    // Drawn on the road when close to it, as every navigation app does.
+    // Drawn on the road when close to it, as every navigation app does —
+    // and drawn exactly at each reading. No gliding between readings: the
+    // arrow is where the phone last said it was, nothing in between.
     final p = _nav.shownPosition;
-    if (p != null && p != _toPos) {
-      // Over about the time since the last reading, at a steady pace, so
-      // the arrow is still moving when the next one arrives. It used to take
-      // a fixed 0.95 s, slowing to a stop each time: the arrow pulsed once a
-      // second, and paused outright whenever a reading came late.
-      final now = DateTime.now();
-      final from = _shownPos ?? p;
-      final duration = glideDuration(
-        from: from,
-        to: p,
-        sinceLastReading: _lastReading == null
-            ? Duration.zero
-            : now.difference(_lastReading!),
-      );
-      _lastReading = now;
-      _fromPos = from;
-      _toPos = p;
-      _fromHeading = _shownHeading;
-      _toHeading = _nav.heading;
-      if (duration == Duration.zero) {
-        // GPS back after a gap: jump, rather than drive through buildings.
-        _anim.stop();
-        _shownPos = p;
-        _shownHeading = _toHeading;
-        _followCamera();
-      } else {
-        _anim
-          ..duration = duration
-          ..forward(from: 0);
-      }
-    } else if (_nav.heading != _toHeading) {
-      // Only the heading changed — a re-route, mid-glide. Carry on from
-      // where the arrow is. Restarting from the previous reading, as this
-      // used to, sent the arrow jumping back to it before gliding again.
-      final left = (_anim.duration ?? _turn) * (1 - _anim.value);
-      _fromPos = _shownPos ?? _fromPos;
-      _fromHeading = _shownHeading;
-      _toHeading = _nav.heading;
-      _anim
-        ..duration = left > _turn ? left : _turn
-        ..forward(from: 0);
-    }
-    if (mounted) setState(() {});
-  }
-
-  void _onFrame() {
-    final from = _fromPos, to = _toPos;
-    if (from == null || to == null) return;
-    // Position at a steady pace, like a vehicle; heading eased, like a turn.
-    _shownPos = lerpLatLng(from, to, _anim.value);
-    final turn = Curves.easeOut.transform(_anim.value);
-    _shownHeading =
-        (_fromHeading + shortestTurn(_fromHeading, _toHeading) * turn) % 360;
-    _followCamera();
+    final moved = p != null && p != _shownPos;
+    final turned = _nav.heading != _shownHeading;
+    if (p != null) _shownPos = p;
+    _shownHeading = _nav.heading;
+    if (moved || turned) _followCamera();
     if (mounted) setState(() {});
   }
 

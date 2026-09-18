@@ -26,6 +26,8 @@
 /// Pure — no clock, no plugin — so all of it is tested without a device.
 library;
 
+import 'dart:math' as math;
+
 import 'package:latlong2/latlong.dart';
 
 import 'live_route.dart';
@@ -83,6 +85,28 @@ LatLng lerpAlong(LatLng a, LatLng b, double t) {
   );
 }
 
+/// How quickly a correction is worked in, as a time constant rather than a
+/// fraction per frame.
+///
+/// A fixed fraction per frame is smooth at sixty frames a second and
+/// noticeably slower at thirty — the correction rate then depends on how
+/// busy the phone is, which is exactly when it should not. Expressed as a
+/// time constant, the same correction takes the same wall-clock time
+/// whatever the frame rate: about this long to close two thirds of the gap.
+const Duration kCatchUp = Duration(milliseconds: 220);
+
+/// How much of the remaining gap to close after [since] has elapsed.
+///
+/// Exponential: fast at first, easing in as it arrives, and never
+/// overshooting. A frame that took unusually long closes proportionally
+/// more, so a stutter does not leave the marker trailing.
+double catchUpFraction(Duration since, {Duration constant = kCatchUp}) {
+  final ms = since.inMicroseconds / 1000.0;
+  final tau = constant.inMicroseconds / 1000.0;
+  if (ms <= 0 || tau <= 0) return 0;
+  return (1 - math.exp(-ms / tau)).clamp(0.0, 1.0);
+}
+
 /// The route ahead of [at], beginning exactly at [at].
 ///
 /// Trimming to what is ahead is not enough on its own: it starts the line
@@ -93,14 +117,29 @@ LatLng lerpAlong(LatLng a, LatLng b, double t) {
 /// When the vehicle is off the route altogether, the join is the honest
 /// picture rather than a cosmetic fix: here is you, there is the road you
 /// are meant to be on.
-List<LatLng> lineFromVehicle(List<LatLng> route, LatLng? at) {
-  if (at == null) return route;
-  final ahead = lineAhead(route, at);
-  if (ahead.isEmpty) return ahead;
+List<LatLng> lineFromVehicle(List<LatLng> route, LatLng? at) =>
+    trimmedFromVehicle(route, at).line;
+
+/// As [lineFromVehicle], but reporting which segment the vehicle was found
+/// on so the next frame can start looking there.
+///
+/// Without it every frame scans the whole route to find the vehicle — a few
+/// hundred segments, sixty times a second, for a line that moved a metre.
+/// The hint also keeps the answer stable where a route passes close to
+/// itself: a loop round a block, or a U-turn at the start.
+({List<LatLng> line, int? segment}) trimmedFromVehicle(
+  List<LatLng> route,
+  LatLng? at, {
+  int? hint,
+}) {
+  if (at == null) return (line: route, segment: hint);
+  final progress = progressAlong(route, at, hint: hint);
+  final ahead = lineAhead(route, at, hint: hint);
+  if (ahead.isEmpty) return (line: ahead, segment: progress?.segment);
   final gap = const Distance().as(LengthUnit.Meter, at, ahead.first);
   // Under a metre is the same point as far as any map is concerned, and
   // repeating it would draw a zero-length segment.
-  return gap < 1 ? ahead : [at, ...ahead];
+  return (line: gap < 1 ? ahead : [at, ...ahead], segment: progress?.segment);
 }
 
 /// Where to draw a vehicle [sinceFix] after its last known position.

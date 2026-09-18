@@ -139,9 +139,9 @@ const double kOnRouteMeters = 150;
 /// A position that is nowhere near the route — more than [kOnRouteMeters]
 /// away — leaves it whole. Snapping something that far off would draw a
 /// line from a place the driver is not.
-List<LatLng> lineAhead(List<LatLng> points, LatLng? position) {
+List<LatLng> lineAhead(List<LatLng> points, LatLng? position, {int? hint}) {
   if (position == null || points.length < 2) return points;
-  final progress = progressAlong(points, position);
+  final progress = progressAlong(points, position, hint: hint);
   if (progress == null || progress.offRouteMeters > kOnRouteMeters) {
     return points;
   }

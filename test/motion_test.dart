@@ -91,6 +91,77 @@ void main() {
     });
   });
 
+  group('how a correction is eased in', () {
+    // By the clock, not by the frame: a fixed fraction per frame moves at
+    // one speed on a phone drawing sixty and half that on one drawing
+    // thirty, so the motion depended on how busy the phone was.
+    test('a longer frame closes more of the gap', () {
+      final short = catchUpFraction(const Duration(milliseconds: 16));
+      final long = catchUpFraction(const Duration(milliseconds: 33));
+      expect(long, greaterThan(short));
+    });
+
+    test('two short frames close about as much as one long one', () {
+      // This is the property that makes the speed frame-rate independent.
+      const step = Duration(milliseconds: 16);
+      final one = catchUpFraction(step);
+      final afterTwo = 1 - (1 - one) * (1 - one);
+      final inOneGo = catchUpFraction(const Duration(milliseconds: 32));
+      expect(afterTwo, closeTo(inOneGo, 0.01));
+    });
+
+    test('the time constant closes about two thirds of the gap', () {
+      expect(catchUpFraction(kCatchUp), closeTo(0.63, 0.02));
+    });
+
+    test('it never overshoots, however long the stall', () {
+      expect(
+        catchUpFraction(const Duration(seconds: 30)),
+        lessThanOrEqualTo(1),
+      );
+      expect(catchUpFraction(const Duration(seconds: 30)), greaterThan(0.99));
+    });
+
+    test('no time passing moves nothing', () {
+      expect(catchUpFraction(Duration.zero), 0);
+      expect(catchUpFraction(const Duration(milliseconds: -5)), 0);
+    });
+  });
+
+  group('trimming with a hint', () {
+    /// [meters] to the side of point [i] — GPS never sits on the centreline.
+    LatLng beside(int i, double meters) =>
+        distance.offset(straight[i], meters, 0);
+
+    test('the hint gives the same answer as a full search', () {
+      final at = beside(5, 6);
+      final blind = trimmedFromVehicle(straight, at);
+      final hinted = trimmedFromVehicle(straight, at, hint: blind.segment);
+      expect(hinted.line.length, blind.line.length);
+      expect(hinted.segment, blind.segment);
+    });
+
+    test('driving the route, each frame hints the next', () {
+      int? hint;
+      var last = 1 << 30;
+      for (var i = 0; i < straight.length; i++) {
+        final trimmed = trimmedFromVehicle(straight, beside(i, 4), hint: hint);
+        expect(trimmed.line.length, lessThanOrEqualTo(last), reason: 'at $i');
+        last = trimmed.line.length;
+        hint = trimmed.segment;
+      }
+    });
+
+    test('a wildly wrong hint still finds the vehicle', () {
+      // The hint is a shortcut, never a constraint: a jump — GPS returning
+      // after a tunnel — must not pin the line to where it used to be.
+      final at = beside(1, 5);
+      final wrong = trimmedFromVehicle(straight, at, hint: 400);
+      final blind = trimmedFromVehicle(straight, at);
+      expect(wrong.line.length, blind.line.length);
+    });
+  });
+
   group('carrying a vehicle forward', () {
     test('a stopped vehicle stays where it is', () {
       // GPS speed jitters while parked; projecting it would have a standing

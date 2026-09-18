@@ -153,12 +153,12 @@ class _GlidingMarkerLayerState extends State<GlidingMarkerLayer>
     _show(lerpLatLng(from, to, _motion.value));
   }
 
-  /// How much of the gap to the road position is closed each frame.
-  ///
-  /// Eased rather than snapped: a reading that disagrees with where the
-  /// marker had got to is worked in over a few frames, so a correction
-  /// looks like the vehicle adjusting rather than teleporting.
-  static const double _catchUpPerFrame = 0.18;
+  /// When the last frame was drawn, so a correction is worked in by the
+  /// clock rather than by the frame. A fixed fraction per frame moves at
+  /// one speed on a phone drawing sixty and half that on one drawing
+  /// thirty — the motion then depends on how busy the phone is, which is
+  /// exactly when it should not.
+  DateTime? _lastFrame;
 
   void _driveAlongRoad() {
     final fix = widget.target;
@@ -171,6 +171,12 @@ class _GlidingMarkerLayerState extends State<GlidingMarkerLayer>
       route: widget.route,
     ).at;
 
+    final now = DateTime.now();
+    final since = _lastFrame == null
+        ? Duration.zero
+        : now.difference(_lastFrame!);
+    _lastFrame = now;
+
     final shown = _shown;
     if (shown == null) {
       _show(ought);
@@ -181,7 +187,7 @@ class _GlidingMarkerLayerState extends State<GlidingMarkerLayer>
       _show(ought);
       return;
     }
-    _show(lerpLatLng(shown, ought, _catchUpPerFrame));
+    _show(lerpLatLng(shown, ought, catchUpFraction(since)));
   }
 
   /// Draws the marker at [at] and tells anything following where that is.

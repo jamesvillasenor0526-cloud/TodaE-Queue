@@ -105,6 +105,10 @@ class _TripRouteLayerState extends State<TripRouteLayer> {
     if (wandered && stale) _fetchFallback();
   }
 
+  /// Which segment of the route the vehicle was on last frame — a cache, so
+  /// the next frame starts its search there instead of at the beginning.
+  int? _hint;
+
   /// Identifies a route cheaply, so the camera only moves when the route
   /// genuinely changes rather than on every rebuild.
   String? _framed;
@@ -191,10 +195,17 @@ class _TripRouteLayerState extends State<TripRouteLayer> {
         // only this layer redraws, not the map around it.
         return ValueListenableBuilder<LatLng?>(
           valueListenable: follows,
-          builder: (context, drawnAt, _) => _line(
-            lineFromVehicle(whole, drawnAt ?? widget.from),
-            isRoad: isRoad,
-          ),
+          builder: (context, drawnAt, _) {
+            // Starting the search where the vehicle was last found, rather
+            // than scanning the whole route again for every frame.
+            final trimmed = trimmedFromVehicle(
+              whole,
+              drawnAt ?? widget.from,
+              hint: _hint,
+            );
+            _hint = trimmed.segment;
+            return _line(trimmed.line, isRoad: isRoad);
+          },
         );
       },
     );

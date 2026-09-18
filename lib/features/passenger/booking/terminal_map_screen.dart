@@ -6,15 +6,12 @@ import 'package:flutter_map/flutter_map.dart';
 import '../../../widgets/map_tiles.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../config/theme.dart';
-import '../../../config/routes.dart';
-import '../../../core/services/dispatch_service.dart';
 import '../../../core/models/road_report.dart';
 import '../../shared/navigation/gliding_marker_layer.dart';
 import '../../shared/reports/report_map_layer.dart';
 import '../../../core/models/location_need.dart';
 import '../../../core/services/location_hub.dart';
 import '../../shared/reports/report_sheet.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 
 class TerminalMapScreen extends StatefulWidget {
@@ -280,55 +277,23 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
                       height: 60,
                       child: GestureDetector(
                         onTap: () async {
-                          final result =
-                              await showModalBottomSheet<DispatchResult>(
-                                context: context,
-                                builder: (_) => _TerminalSheet(
-                                  name: data['name'] ?? 'Terminal',
-                                  terminalId: doc.id,
-                                ),
-                              );
-
-                          if (result == null || !context.mounted) return;
-
-                          if (result.success) {
-                            final terminalName = data['name'] ?? 'Terminal';
-                            showDialog(
-                              context: context,
-                              builder: (dialogContext) => AlertDialog(
-                                title: const Text('Driver on the way! 🚖'),
-                                content: Text(
-                                  '${result.driverName} has been dispatched from $terminalName.',
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () {
-                                      Navigator.pop(dialogContext);
-                                      Navigator.pushReplacementNamed(
-                                        context,
-                                        AppRoutes.tripTracking,
-                                        arguments: {
-                                          'bookingId': result.bookingId ?? '',
-                                          'driverName':
-                                              result.driverName ?? 'Driver',
-                                          'terminalName': terminalName,
-                                        },
-                                      );
-                                    },
-                                    child: const Text('Track Driver'),
-                                  ),
-                                ],
-                              ),
-                            );
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  result.message ?? 'Could not book a ride.',
-                                ),
-                              ),
-                            );
-                          }
+                          final terminalName =
+                              (data['name'] ?? 'Terminal') as String;
+                          final book = await showModalBottomSheet<bool>(
+                            context: context,
+                            builder: (_) => _TerminalSheet(
+                              name: terminalName,
+                              terminalId: doc.id,
+                            ),
+                          );
+                          if (book != true || !context.mounted) return;
+                          // Back to the home screen, which books through
+                          // pick-up, destination and fare. Dispatching from
+                          // here made a trip with none of the three.
+                          Navigator.pop(context, {
+                            'terminalId': doc.id,
+                            'terminalName': terminalName,
+                          });
                         },
                         child: Column(
                           children: [
@@ -400,8 +365,7 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
                     },
                   ),
                   MarkerLayer(markers: markers),
-                  // "You are here", gliding between readings rather than
-                  // hopping from one to the next.
+                  // "You are here", at the latest reading.
                   GlidingMarkerLayer(
                     target: _userLocation,
                     child: const _YouAreHereDot(),
@@ -660,19 +624,6 @@ class _TerminalSheet extends StatefulWidget {
 }
 
 class _TerminalSheetState extends State<_TerminalSheet> {
-  bool _isBooking = false;
-
-  Future<void> _bookRide() async {
-    setState(() => _isBooking = true);
-    final passengerId = FirebaseAuth.instance.currentUser!.uid;
-    final result = await DispatchService.instance.dispatchNextDriver(
-      terminalId: widget.terminalId,
-      passengerId: passengerId,
-    );
-    if (!mounted) return;
-    Navigator.pop(context, result);
-  }
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -711,18 +662,9 @@ class _TerminalSheetState extends State<_TerminalSheet> {
           ),
           const SizedBox(height: 16),
           ElevatedButton.icon(
-            onPressed: _isBooking ? null : _bookRide,
-            icon: _isBooking
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.electric_rickshaw),
-            label: Text(_isBooking ? 'Booking...' : 'Book from this terminal'),
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.electric_rickshaw),
+            label: const Text('Book from this terminal'),
           ),
         ],
       ),

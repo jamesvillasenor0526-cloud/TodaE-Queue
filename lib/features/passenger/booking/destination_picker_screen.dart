@@ -37,8 +37,8 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
   bool _isCalculatingRoute = false;
   double? _routeDistance;
   double? _routeFare;
-  double? _terminalToPickupDistance; // ← ADD
-  double? _pickupToDestinationDistance; // ← ADD
+  double? _terminalToPickupDistance;
+  double? _pickupToDestinationDistance;
 
   /// False when the router could not be reached and the distance is worked
   /// out from the straight line instead, so the fare can say so.
@@ -83,8 +83,29 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
     );
   }
 
+  /// Set when the fare could not be worked out, so the passenger is told and
+  /// can try again rather than waiting on a spinner that never finishes.
+  bool _fareFailed = false;
+
+  /// Whether the distance and fare on screen are for [_destination] — not
+  /// for a spot tapped earlier, and not a placeholder.
+  bool get _fareReady =>
+      _destination != null && _routeFare != null && !_isCalculatingRoute;
+
   Future<void> _calculateRouteAndFare(LatLng destination) async {
     final pickup = LatLng(widget.pickupLat, widget.pickupLng);
+    if (mounted) {
+      setState(() {
+        _isCalculatingRoute = true;
+        _fareFailed = false;
+      });
+    }
+
+    // Only the answer for the spot still selected counts. Tapping twice in
+    // quick succession ran two of these at once, and whichever finished last
+    // won — so the fare for the first spot could be shown, and booked, for
+    // the second.
+    bool stillWanted() => mounted && _destination == destination;
 
     try {
       // Get terminal coordinates from Firestore
@@ -95,10 +116,12 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
 
       final terminalData = terminalSnap.data();
       final boundary = terminalData?['boundary'] as List<dynamic>? ?? [];
-      if (boundary.isEmpty) return;
-
-      final terminalPoint = _parseBoundaryPoint(boundary[0]);
-      if (terminalPoint == null) return;
+      final terminalPoint = boundary.isEmpty
+          ? null
+          : _parseBoundaryPoint(boundary[0]);
+      if (terminalPoint == null) {
+        throw StateError('Terminal ${widget.terminalId} has no location');
+      }
 
       // Road distance from terminal to pickup, and from pickup to where
       // they are going.
@@ -130,43 +153,32 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
         kmOutside: outOfTown.charged ? outOfTown.kmOutside : 0,
       );
 
-      if (mounted) {
-        setState(() {
-          _routeDistance = totalDistance;
-          _routeFare = fare;
-          _outOfTown = outOfTown;
-          _terminalToPickupDistance = terminalToPickupDistance; // ← ADD
-          _pickupToDestinationDistance = pickupToDestinationDistance; // ← ADD
-        });
-      }
+      if (!stillWanted()) return;
+      setState(() {
+        _routeDistance = totalDistance;
+        _routeFare = fare;
+        _outOfTown = outOfTown;
+        _terminalToPickupDistance = terminalToPickupDistance;
+        _pickupToDestinationDistance = pickupToDestinationDistance;
+        _isCalculatingRoute = false;
+      });
     } catch (e) {
-      // Routing is best-effort: on failure the previously shown distance and
-      // fare stay put rather than blanking the estimate.
       debugPrint('Route estimate failed: $e');
+      if (!stillWanted()) return;
+      setState(() {
+        _isCalculatingRoute = false;
+        _fareFailed = true;
+      });
     }
   }
 
-  Future<void> _confirmAndReturn() async {
-    if (_destination == null) return;
-
-    setState(() => _isCalculatingRoute = true);
-
-    final pickup = LatLng(widget.pickupLat, widget.pickupLng);
-
-    // Use calculated route distance, or calculate if not done yet
-    final distance =
-        _routeDistance ??
-        await RoutingService.instance.getRouteDistance(pickup, _destination!);
-    final fare =
-        _routeFare ??
-        FareService.instance.fareWithReturn(
-          distanceInKm: distance,
-          kmOutside: _outOfTown.charged ? _outOfTown.kmOutside : 0,
-        );
-
-    if (!mounted) return;
-
-    setState(() => _isCalculatingRoute = false);
+  void _confirmAndReturn() {
+    // Only ever the fare worked out for this destination, terminal leg and
+    // out-of-town charge included. Confirming early used to book a fallback
+    // that left both out.
+    if (!_fareReady) return;
+    final distance = _routeDistance!;
+    final fare = _routeFare!;
 
     Navigator.pop(context, {
       'pickupLat': widget.pickupLat,
@@ -213,18 +225,14 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
   Widget build(BuildContext context) {
     final pickup = LatLng(widget.pickupLat, widget.pickupLng);
 
-    // Display route distance if available, else straight-line
-    final displayDistance =
-        _routeDistance ??
-        (_destination != null
-            ? FareService.instance.calculateDistance(pickup, _destination!)
-            : 0);
-    final displayFare =
-        _routeFare ??
-        FareService.instance.fareWithReturn(
-          distanceInKm: displayDistance.toDouble(),
-          kmOutside: _outOfTown.charged ? _outOfTown.kmOutside : 0,
-        );
+    // No placeholder fare. A straight-line guess was shown while the real one
+    // was worked out, lower than the real one — so the price jumped up a
+    // moment later, after the passenger had already read it.
+    final displayFare = _fareReady
+        ? FareService.instance.formatFare(_routeFare!)
+        : _fareFailed
+        ? '—'
+        : '...';
     final outOfTownFee = _outOfTown.charged
         ? FareService.instance.outOfTownExtra(_outOfTown.kmOutside)
         : 0.0;
@@ -448,7 +456,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                           ),
                         ),
                         Text(
-                          FareService.instance.formatFare(displayFare),
+                          displayFare,
                           style: const TextStyle(
                             fontSize: 22,
                             fontWeight: FontWeight.bold,
@@ -457,7 +465,30 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                         ),
                       ],
                     ),
-                    if (!_distanceMeasured && _destination != null)
+                    if (_fareFailed)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Row(
+                          children: [
+                            const Expanded(
+                              child: Text(
+                                'Could not work out the fare. Check your '
+                                'connection and try again.',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: AppTheme.errorRed,
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () =>
+                                  _calculateRouteAndFare(_destination!),
+                              child: const Text('Try again'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (!_distanceMeasured && _fareReady)
                       const Padding(
                         padding: EdgeInsets.only(top: 6),
                         child: Text(
@@ -503,8 +534,10 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                         _routeFare = null;
                         _outOfTown = OutOfTown.none;
                         _distanceMeasured = true;
-                        _terminalToPickupDistance = null; // ← ADD
-                        _pickupToDestinationDistance = null; // ← ADD
+                        _fareFailed = false;
+                        _isCalculatingRoute = false;
+                        _terminalToPickupDistance = null;
+                        _pickupToDestinationDistance = null;
                       }),
                       icon: const Icon(Icons.clear, size: 16),
                       label: const Text(
@@ -517,9 +550,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
-                      onPressed: _destination != null
-                          ? _confirmAndReturn
-                          : null,
+                      onPressed: _fareReady ? _confirmAndReturn : null,
                       icon: _isCalculatingRoute
                           ? const SizedBox(
                               width: 16,
@@ -532,9 +563,11 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                           : const Icon(Icons.check_circle),
                       label: Text(
                         _isCalculatingRoute
-                            ? 'Calculating Route...'
-                            : _destination != null
+                            ? 'Calculating fare...'
+                            : _fareReady
                             ? 'Confirm & Book'
+                            : _fareFailed
+                            ? 'Fare unavailable'
                             : 'Tap map to set destination',
                       ),
                       style: ElevatedButton.styleFrom(

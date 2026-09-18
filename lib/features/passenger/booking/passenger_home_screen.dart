@@ -104,8 +104,20 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         children: [
           FloatingActionButton(
             heroTag: 'map',
-            onPressed: () =>
-                Navigator.pushNamed(context, AppRoutes.terminalMap),
+            // The map picks a terminal; booking from it is the same flow
+            // as from the list.
+            onPressed: () async {
+              final picked = await Navigator.pushNamed<Map<String, String>>(
+                context,
+                AppRoutes.terminalMap,
+              );
+              if (picked == null || !context.mounted) return;
+              await _bookFromTerminal(
+                context,
+                picked['terminalId']!,
+                picked['terminalName']!,
+              );
+            },
             backgroundColor: AppTheme.primaryBlue,
             child: const Icon(Icons.map, color: Colors.white),
           ),
@@ -730,141 +742,109 @@ class _HomeTabState extends State<_HomeTab> {
       ),
     );
   }
+}
 
-  Future<void> _bookFromTerminal(
-    BuildContext context,
-    String terminalId,
-    String terminalName,
-  ) async {
-    // Capture the navigator BEFORE any async operations
-    final navigator = Navigator.of(context);
+/// The whole booking, from a chosen terminal: pick-up point, destination,
+/// fare, then dispatch.
+///
+/// Shared by the terminal list and the terminal map, so both book the same
+/// way. The map used to dispatch a driver straight from its pin, which made
+/// a booking with no pick-up, no destination and no fare — the driver was
+/// sent with nowhere to go, and the service-area check never ran.
+Future<void> _bookFromTerminal(
+  BuildContext context,
+  String terminalId,
+  String terminalName,
+) async {
+  // Capture the navigator BEFORE any async operations
+  final navigator = Navigator.of(context);
 
-    final pickupData = await navigator.push<Map<String, dynamic>>(
-      MaterialPageRoute(
-        builder: (_) => PickupLocationScreen(
-          terminalId: terminalId,
-          terminalName: terminalName,
-        ),
+  final pickupData = await navigator.push<Map<String, dynamic>>(
+    MaterialPageRoute(
+      builder: (_) => PickupLocationScreen(
+        terminalId: terminalId,
+        terminalName: terminalName,
       ),
-    );
+    ),
+  );
 
-    if (pickupData == null) return;
-    final pickupLat = pickupData['latitude'] as double;
-    final pickupLng = pickupData['longitude'] as double;
+  if (pickupData == null) return;
+  final pickupLat = pickupData['latitude'] as double;
+  final pickupLng = pickupData['longitude'] as double;
 
-    final bookingData = await navigator.push<Map<String, dynamic>>(
-      MaterialPageRoute(
-        builder: (_) => DestinationPickerScreen(
-          pickupLat: pickupLat,
-          pickupLng: pickupLng,
-          terminalId: terminalId,
-          terminalName: terminalName,
-        ),
+  final bookingData = await navigator.push<Map<String, dynamic>>(
+    MaterialPageRoute(
+      builder: (_) => DestinationPickerScreen(
+        pickupLat: pickupLat,
+        pickupLng: pickupLng,
+        terminalId: terminalId,
+        terminalName: terminalName,
       ),
-    );
+    ),
+  );
 
-    if (bookingData == null) return;
-    final destinationLat = bookingData['destinationLat'] as double;
-    final destinationLng = bookingData['destinationLng'] as double;
-    final distance = bookingData['distance'] as double;
-    final fare = bookingData['fare'] as double;
+  if (bookingData == null) return;
+  final destinationLat = bookingData['destinationLat'] as double;
+  final destinationLng = bookingData['destinationLng'] as double;
+  final distance = bookingData['distance'] as double;
+  final fare = bookingData['fare'] as double;
 
-    final result = await navigator.push<DispatchResult>(
-      MaterialPageRoute(
-        builder: (_) => _TerminalSheetScreen(
-          terminalName: terminalName,
-          terminalId: terminalId,
-          pickupLat: pickupLat,
-          pickupLng: pickupLng,
-          destinationLat: destinationLat,
-          destinationLng: destinationLng,
-          distance: distance,
-          fare: fare,
-          outsideServiceArea: bookingData['outsideServiceArea'] == true,
-          outOfTownFee: (bookingData['outOfTownFee'] as num?)?.toDouble() ?? 0,
-          outOfTownKm: (bookingData['outOfTownKm'] as num?)?.toDouble() ?? 0,
-        ),
+  final result = await navigator.push<DispatchResult>(
+    MaterialPageRoute(
+      builder: (_) => _TerminalSheetScreen(
+        terminalName: terminalName,
+        terminalId: terminalId,
+        pickupLat: pickupLat,
+        pickupLng: pickupLng,
+        destinationLat: destinationLat,
+        destinationLng: destinationLng,
+        distance: distance,
+        fare: fare,
+        outsideServiceArea: bookingData['outsideServiceArea'] == true,
+        outOfTownFee: (bookingData['outOfTownFee'] as num?)?.toDouble() ?? 0,
+        outOfTownKm: (bookingData['outOfTownKm'] as num?)?.toDouble() ?? 0,
       ),
-    );
+    ),
+  );
 
-    if (result == null || !context.mounted) return;
+  if (result == null || !context.mounted) return;
 
-    if (result.success) {
-      showDialog(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Driver on the way! 🚖'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Text(
-                '${result.driverName} has been dispatched.\n\nFare: ${FareService.instance.formatFare(fare)}',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              // Driver GCash QR code
-              FutureBuilder<DocumentSnapshot>(
-                future: FirebaseFirestore.instance
-                    .collection('users')
-                    .doc(result.driverId)
-                    .get(),
-                builder: (context, driverSnap) {
-                  final gcashQrUrl = driverSnap.data?.data() != null
-                      ? (driverSnap.data!.data()
-                                as Map<String, dynamic>)['gcashQrUrl']
-                            as String?
-                      : null;
-                  if (gcashQrUrl == null) {
-                    return const SizedBox.shrink();
-                  }
-
-                  return Column(
-                    children: [
-                      const Divider(height: 24),
-                      const Text(
-                        'Scan GCash QR to pay:',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: AppTheme.textMuted,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Image.network(
-                        gcashQrUrl,
-                        height: 150,
-                        fit: BoxFit.contain,
-                      ),
-                    ],
-                  );
+  if (result.success) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Driver on the way! 🚖'),
+        // No payment here. Paying — cash or the driver's GCash QR — is
+        // done from the trip screen once the driver has arrived; showing
+        // the QR at booking asked the passenger to pay for a ride that had
+        // not started and might yet be cancelled.
+        content: Text(
+          '${result.driverName} has been dispatched.\n\nFare: ${FareService.instance.formatFare(fare)}',
+          textAlign: TextAlign.center,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              Navigator.pushNamed(
+                context,
+                AppRoutes.tripTracking,
+                arguments: {
+                  'bookingId': result.bookingId ?? '',
+                  'driverName': result.driverName ?? 'Driver',
+                  'terminalName': terminalName,
                 },
-              ),
-            ],
+              );
+            },
+            child: const Text('Track Driver'),
           ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-                Navigator.pushNamed(
-                  context,
-                  AppRoutes.tripTracking,
-                  arguments: {
-                    'bookingId': result.bookingId ?? '',
-                    'driverName': result.driverName ?? 'Driver',
-                    'terminalName': terminalName,
-                  },
-                );
-              },
-              child: const Text('Track Driver'),
-            ),
-          ],
-        ),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result.message ?? 'Could not book a ride.')),
-      );
-    }
+        ],
+      ),
+    );
+  } else {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(result.message ?? 'Could not book a ride.')),
+    );
   }
 }
 

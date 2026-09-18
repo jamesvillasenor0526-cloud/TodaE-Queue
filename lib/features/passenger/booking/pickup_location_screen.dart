@@ -39,9 +39,13 @@ class _PickupLocationScreenState extends State<PickupLocationScreen> {
 
   Future<void> _getCurrentLocation() async {
     try {
+      // A time limit, because indoors or with a weak signal the first fix can
+      // take minutes — or never come — and this screen showed nothing but a
+      // spinner until it did, with no way to book.
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 10),
         ),
       );
       if (mounted) {
@@ -59,7 +63,10 @@ class _PickupLocationScreenState extends State<PickupLocationScreen> {
         setState(() {
           _isLoadingLocation = false;
           _locationUnavailable = true;
-          _selectedLocation = _baliwagCenter;
+          // Nothing chosen yet. This used to pre-select the middle of town,
+          // so a passenger who confirmed without looking booked a pick-up
+          // somewhere they had never been.
+          _selectedLocation = null;
         });
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _mapController.move(_baliwagCenter, 15);

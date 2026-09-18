@@ -1854,8 +1854,7 @@ class _MiniMapWidgetState extends State<MiniMapWidget> {
                           ),
                       ],
                     ),
-                    // Glides between the positions the phone sends, rather
-                    // than hopping every couple of seconds.
+                    // At the latest position this phone reported.
                     GlidingMarkerLayer(
                       target: driverPoint,
                       reports: _drawnAt,
@@ -2012,7 +2011,7 @@ class _DriverMapTabState extends State<_DriverMapTab> {
       builder: (context, snapshot) {
         final terminals = snapshot.data?.docs ?? [];
         final markers = <Marker>[];
-        final circles = <CircleMarker>[];
+        final areas = <Polygon>[];
 
         for (final doc in terminals) {
           final data = doc.data() as Map<String, dynamic>;
@@ -2025,12 +2024,17 @@ class _DriverMapTabState extends State<_DriverMapTab> {
           final isAssigned =
               _assignedTerminalName == null ||
               data['name'] == _assignedTerminalName;
-          if (isAssigned) {
-            circles.add(
-              CircleMarker(
-                point: point,
-                radius: 5,
-                useRadiusInMeter: true,
+          // The actual check-in area — the same outline the geofence tests
+          // against. This used to be a 5 m circle on one corner of it, so
+          // "drive into the highlighted circle" pointed at the wrong spot.
+          final outline = boundary
+              .map(_parseBoundaryPoint)
+              .whereType<LatLng>()
+              .toList();
+          if (isAssigned && outline.length >= 3) {
+            areas.add(
+              Polygon(
+                points: outline,
                 color: AppTheme.primaryGreen.withValues(alpha: 0.3),
                 borderColor: AppTheme.primaryGreen,
                 borderStrokeWidth: 2,
@@ -2088,7 +2092,7 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                           ),
                           const SizedBox(height: 8),
                           const Text(
-                            'Drive into the highlighted circle to check in automatically.',
+                            'Drive into the highlighted area to check in automatically.',
                             style: TextStyle(
                               color: AppTheme.textMuted,
                               fontSize: 12,
@@ -2153,7 +2157,7 @@ class _DriverMapTabState extends State<_DriverMapTab> {
               ),
               children: [
                 AppTileLayer(),
-                CircleLayer(circles: circles),
+                PolygonLayer(polygons: areas),
                 // Drivers are the main source of these reports and the main
                 // audience for them. Shaded under the markers so terminals
                 // and vehicles stay readable on top of the traffic colour.
@@ -2167,7 +2171,7 @@ class _DriverMapTabState extends State<_DriverMapTab> {
                   },
                 ),
                 MarkerLayer(markers: markers),
-                // "You", gliding between GPS readings rather than jumping.
+                // "You", at the latest GPS reading.
                 GlidingMarkerLayer(
                   target: _myPosition,
                   child: const _SelfLocationDot(),

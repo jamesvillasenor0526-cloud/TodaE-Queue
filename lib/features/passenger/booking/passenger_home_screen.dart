@@ -814,7 +814,7 @@ Future<void> _bookFromTerminal(
     showDialog(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Driver on the way! 🚖'),
+        title: const Text('Wait for the Driver! 🚖'),
         // No payment here. Paying — cash or the driver's GCash QR — is
         // done from the trip screen once the driver has arrived; showing
         // the QR at booking asked the passenger to pay for a ride that had

@@ -23,6 +23,7 @@ import '../../../config/theme_controller.dart';
 import '../../../widgets/shimmer_loading.dart';
 import '../../../widgets/state_views.dart';
 import 'widgets/trip_action_panel.dart';
+import '../verification/resubmit_screen.dart';
 import '../../../core/models/trip_state.dart';
 import '../../../core/models/navigation_state.dart';
 import '../../../core/services/trip_service.dart';
@@ -603,7 +604,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             break;
           case 'rejected':
             message =
-                'Your account was rejected. Please contact your TODA admin.';
+                'Your registration was not approved. See the reason on your '
+                'Queue tab, then fix and resubmit.';
             break;
           default:
             message =
@@ -1088,6 +1090,25 @@ class _NoQueueView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // An unapproved driver cannot check in, so where they would be told to
+    // drive to a terminal they are told where their approval stands — and,
+    // when rejected, why, and how to fix it.
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return _idle();
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .snapshots(),
+      builder: (context, snap) {
+        final data = snap.data?.data();
+        if (data == null || data['isVerified'] == true) return _idle();
+        return _VerificationStatusView(profile: data);
+      },
+    );
+  }
+
+  Widget _idle() {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -1107,6 +1128,106 @@ class _NoQueueView extends StatelessWidget {
               textAlign: TextAlign.center,
               style: const TextStyle(color: AppTheme.textMuted, fontSize: 15),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Where an unapproved driver's account stands.
+class _VerificationStatusView extends StatelessWidget {
+  const _VerificationStatusView({required this.profile});
+
+  final Map<String, dynamic> profile;
+
+  @override
+  Widget build(BuildContext context) {
+    final rejected = profile['verificationStatus'] == 'rejected';
+    final resubmitted = profile['resubmittedAt'] != null;
+    final reason = (profile['rejectionReason'] as String?)?.trim() ?? '';
+
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              rejected ? Icons.cancel_outlined : Icons.hourglass_top,
+              size: 64,
+              color: rejected ? AppTheme.errorRed : AppTheme.warning,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              rejected
+                  ? 'Your registration was not approved'
+                  : resubmitted
+                  ? 'Your details were sent back for review'
+                  : 'Waiting for approval',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            if (rejected) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppTheme.errorRed.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Reason from your TODA admin',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.textMuted,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      reason.isEmpty ? 'No reason was given.' : reason,
+                      style: const TextStyle(fontSize: 15),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: () async {
+                  final sent = await Navigator.push<bool>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ResubmitScreen(profile: profile),
+                    ),
+                  );
+                  if (sent == true && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Sent. Your TODA admin will review it again.',
+                        ),
+                      ),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.edit_note),
+                label: const Text('Fix and resubmit'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primaryGreen,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ] else
+              const Text(
+                'Your TODA admin is checking your details and photos. You '
+                'can check in at your terminal once you are approved.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppTheme.textMuted, fontSize: 14),
+              ),
           ],
         ),
       ),
@@ -3833,13 +3954,24 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
                 decoration: BoxDecoration(
                   color: isVerified
                       ? Colors.green.withValues(alpha: 0.1)
+                      : data?['verificationStatus'] == 'rejected'
+                      ? Colors.red.withValues(alpha: 0.1)
                       : Colors.orange.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(20),
                 ),
+                // Rejected used to read "Pending Verification" here too.
                 child: Text(
-                  isVerified ? '✅ Verified Driver' : '⏳ Pending Verification',
+                  isVerified
+                      ? '✅ Verified Driver'
+                      : data?['verificationStatus'] == 'rejected'
+                      ? '✖ Not approved — see your Queue tab'
+                      : '⏳ Pending Verification',
                   style: TextStyle(
-                    color: isVerified ? AppTheme.success : AppTheme.warning,
+                    color: isVerified
+                        ? AppTheme.success
+                        : data?['verificationStatus'] == 'rejected'
+                        ? AppTheme.errorRed
+                        : AppTheme.warning,
                     fontWeight: FontWeight.bold,
                     fontSize: 12,
                   ),

@@ -90,6 +90,23 @@ service cloud.firestore {
             || request.resource.data.get('name', null) == resource.data.get('name', null));
     }
 
+    // A rejected driver sending their details back for review: rejected to
+    // pending, and nothing else about their standing. They cannot approve
+    // themselves, change role, switch a disabled account back on, or wipe
+    // the reason they were given. Their name may change here — a name that
+    // does not match the ID is one of the reasons to be rejected.
+    function resubmits() {
+      let before = resource.data;
+      let after = request.resource.data;
+      return before.get('role', '') == 'driver'
+        && before.get('verificationStatus', '') == 'rejected'
+        && after.get('verificationStatus', '') == 'pending'
+        && after.get('isVerified', false) == false
+        && after.get('role', null) == before.get('role', null)
+        && after.get('isActive', true) == before.get('isActive', true)
+        && after.get('rejectionReason', null) == before.get('rejectionReason', null);
+    }
+
     // Terminals — public read so the registration screen can list them
     // before the user has an account. Written only by admins: any signed-in
     // user, passengers included, could add, move or delete a terminal. No
@@ -126,7 +143,7 @@ service cloud.firestore {
       // path driver approval goes through).
       allow update: if (signedIn()
                         && request.auth.uid == userId
-                        && keepsApprovalFields())
+                        && (keepsApprovalFields() || resubmits()))
                     || (isAdmin() && roleChangeAllowed());
 
       allow delete: if false;

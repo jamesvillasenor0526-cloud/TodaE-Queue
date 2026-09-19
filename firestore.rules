@@ -130,6 +130,15 @@ service cloud.firestore {
       }
     }
 
+    // Every user's private record at once — how the dashboard lists drivers'
+    // phones, ID photographs and selfies. A query across all of them is
+    // judged by this rule, not the one nested under users/{userId} above:
+    // without it the dashboard's list was refused outright and every driver
+    // showed "No ID Photo". Admins only, reading only.
+    match /{path=**}/private/{docId} {
+      allow read: if isAdmin();
+    }
+
     // A driver's place in a terminal's queue.
     //
     // Fair first-come order is the point of the whole system, so the three

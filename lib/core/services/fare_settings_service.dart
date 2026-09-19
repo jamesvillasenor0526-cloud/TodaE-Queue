@@ -11,6 +11,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -27,14 +28,34 @@ class FareSettingsService {
       FirebaseFirestore.instance.collection('settings').doc('fare');
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sub;
+  StreamSubscription<User?>? _authSub;
 
-  /// Applies what was last saved on this phone, then follows the document.
+  /// Applies what was last saved on this phone, then follows the document
+  /// for as long as someone is signed in.
   ///
   /// Called at startup. Never throws: a fare has to be quotable even when
   /// everything about this fails.
+  ///
+  /// Following sign-in rather than starting once matters. Only signed-in
+  /// users may read the setting, and this runs before anyone is: on a fresh
+  /// install, or whenever the sign-in had not been restored yet, the first
+  /// read was refused, the listener stopped for good, and that phone went
+  /// on quoting the old rates for the rest of the session however often the
+  /// dashboard changed them.
   Future<void> start() async {
     await _loadCached();
-    _sub?.cancel();
+    await _authSub?.cancel();
+    _authSub = FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (user == null) {
+        _unfollow();
+      } else {
+        _follow();
+      }
+    });
+  }
+
+  void _follow() {
+    _unfollow();
     _sub = _doc.snapshots().listen(
       (snap) {
         if (!snap.exists) return; // nothing saved yet: defaults stand
@@ -43,15 +64,22 @@ class FareSettingsService {
         unawaited(_cache(rates));
       },
       onError: (Object e) {
-        // Offline, or rules refused the read. Whatever was cached stands.
+        // Offline, or rules refused the read. Whatever was cached stands;
+        // the next sign-in follows it again.
         debugPrint('Fare rates: could not follow the setting: $e');
       },
     );
   }
 
-  Future<void> stop() async {
-    await _sub?.cancel();
+  void _unfollow() {
+    _sub?.cancel();
     _sub = null;
+  }
+
+  Future<void> stop() async {
+    await _authSub?.cancel();
+    _authSub = null;
+    _unfollow();
   }
 
   void _apply(FareRates rates) {

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../models/fare_rates.dart';
@@ -12,9 +13,23 @@ class FareService {
   static final FareService instance = FareService._();
   FareService._();
 
+  /// The rates in force, for screens that show them. A screen listening here
+  /// redraws the moment an admin saves new rates — the Fare Matrix used to
+  /// print ₱35 and ₱10/km as fixed text, so a change never reached it.
+  final ValueNotifier<FareRates> ratesListenable = ValueNotifier(
+    FareRates.defaults,
+  );
+
   /// The rates in force. Replaced by [FareSettingsService] when the saved
   /// rates arrive; never left in an unusable state.
-  FareRates rates = FareRates.defaults;
+  FareRates get rates => ratesListenable.value;
+  set rates(FareRates value) => ratesListenable.value = value;
+
+  /// The fare policy in two lines, at the rates in force — for the terms
+  /// every user agrees to, which used to state fixed amounts.
+  String get policyLines =>
+      '• Minimum fare: ${formatFare(currentMinimumFare)} (first 1 kilometer)\n'
+      '• Additional: ${formatFare(currentRatePerKm)} per succeeding kilometer';
 
   /// The rates as they were before they could be set, kept for reading old
   /// receipts that recorded no rates of their own.

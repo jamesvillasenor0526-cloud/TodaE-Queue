@@ -93,6 +93,22 @@ void main() {
       expect(fare.fareWithReturn(distanceInKm: 6, kmOutside: 3), 155);
     });
 
+    test('the fare policy states the rates in force', () {
+      expect(fare.policyLines, contains('₱35 (first 1 kilometer)'));
+      fare.rates = const FareRates(minimumFare: 40, ratePerKm: 12);
+      expect(fare.policyLines, contains('₱40 (first 1 kilometer)'));
+      expect(fare.policyLines, contains('₱12 per succeeding kilometer'));
+    });
+
+    test('a change of rates is announced to whatever shows them', () {
+      FareRates? heard;
+      void listener() => heard = fare.ratesListenable.value;
+      fare.ratesListenable.addListener(listener);
+      addTearDown(() => fare.ratesListenable.removeListener(listener));
+      fare.rates = const FareRates(minimumFare: 50, ratePerKm: 15);
+      expect(heard, const FareRates(minimumFare: 50, ratePerKm: 15));
+    });
+
     test(
       'the rates the app shipped with are still readable, for old receipts',
       () {

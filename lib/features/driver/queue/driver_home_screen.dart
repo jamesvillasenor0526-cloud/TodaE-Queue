@@ -9,6 +9,7 @@ import 'package:latlong2/latlong.dart';
 import '../../../config/routes.dart';
 import '../../../config/theme.dart';
 import '../../../core/models/location_need.dart';
+import '../../../core/services/fare_service.dart';
 import '../../../core/services/geofence_service.dart';
 import '../../../core/services/location_hub.dart';
 import '../../../core/services/dispatch_service.dart';
@@ -3283,9 +3284,9 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 4),
-                const Text(
-                  '• Minimum fare: ₱35.00 (first 1 kilometer)\n'
-                  '• Additional: ₱10.00 per succeeding kilometer\n'
+                // The rates in force, not the ones the app shipped with.
+                Text(
+                  '${FareService.instance.policyLines}\n'
                   '• Fares calculated based on GPS road distance\n'
                   '• Payment accepted: Cash or GCash QR code\n'
                   '• Fares are non-negotiable',

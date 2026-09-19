@@ -7,6 +7,7 @@ import 'dart:io';
 import 'simple_camera_screen.dart';
 import '../../../core/services/cloudinary_service.dart';
 import '../../../core/services/contact_service.dart';
+import '../../../core/services/fare_service.dart';
 import 'package:flutter/services.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -193,9 +194,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 4),
-                const Text(
-                  '• Minimum fare: ₱35.00 (first 1 kilometer)\n'
-                  '• Additional: ₱10.00 per succeeding kilometer\n'
+                // The rates in force, not the ones the app shipped with.
+                Text(
+                  '${FareService.instance.policyLines}\n'
                   '• Fares calculated based on GPS road distance\n'
                   '• Payment accepted: Cash or GCash QR code\n'
                   '• Fares are non-negotiable',

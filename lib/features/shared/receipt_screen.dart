@@ -29,6 +29,13 @@ class ReceiptScreen extends StatelessWidget {
 
           final receipt =
               snapshot.data!.docs.first.data() as Map<String, dynamic>;
+          final fare = (receipt['fare'] as num?)?.toDouble() ?? 0;
+          final baseFare =
+              (receipt['baseFare'] as num?)?.toDouble() ??
+              FareService.minimumFare;
+          // Everything above the base: the kilometres after the first, and
+          // any out-of-town charge. Base plus this is always the total.
+          final distanceCharge = fare > baseFare ? fare - baseFare : 0.0;
 
           return SingleChildScrollView(
             padding: const EdgeInsets.all(24),
@@ -135,21 +142,19 @@ class ReceiptScreen extends StatelessWidget {
                 // before rates could be set, which is exactly what the
                 // receipts missing these fields were charged at — not
                 // today's rates, which would misstate an old trip.
-                _receiptRow(
-                  'Base Fare',
-                  '₱${receipt['baseFare']?.toStringAsFixed(0) ?? FareService.minimumFare.toStringAsFixed(0)}',
-                ),
-                const SizedBox(height: 4),
-                _receiptRow(
-                  'Pickup Fee',
-                  '₱${receipt['pickupFee']?.toStringAsFixed(0) ?? FareService.pickupFee.toStringAsFixed(0)}',
-                ),
-                const SizedBox(height: 4),
-                if (receipt['distance'] > 1.0)
+                //
+                // No pick-up fee line. One was printed — ₱15 — but never
+                // charged: it was carved out of the distance charge, so a
+                // short trip showed a negative "Additional". Old receipts
+                // still carry the field; it is ignored for the same reason.
+                _receiptRow('Base Fare', '₱${baseFare.toStringAsFixed(0)}'),
+                if (distanceCharge > 0) ...[
+                  const SizedBox(height: 4),
                   _receiptRow(
-                    'Additional',
-                    '₱${((receipt['fare'] ?? 0) - (receipt['baseFare'] ?? FareService.minimumFare) - (receipt['pickupFee'] ?? FareService.pickupFee)).toStringAsFixed(0)}',
+                    'Distance Charge',
+                    '₱${distanceCharge.toStringAsFixed(0)}',
                   ),
+                ],
                 const Divider(height: 16),
                 _receiptRow(
                   'TOTAL',

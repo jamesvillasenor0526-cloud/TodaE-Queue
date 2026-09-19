@@ -320,9 +320,9 @@ service cloud.firestore {
     match /settings/{settingId} {
       function withinLimits() {
         let d = request.resource.data;
+        // No pick-up fee: it was never charged, and has been removed.
         return d.minimumFare is number && d.minimumFare >= 5 && d.minimumFare <= 200
-          && d.ratePerKm is number && d.ratePerKm >= 1 && d.ratePerKm <= 100
-          && d.pickupFee is number && d.pickupFee >= 0 && d.pickupFee <= 100;
+          && d.ratePerKm is number && d.ratePerKm >= 1 && d.ratePerKm <= 100;
       }
 
       allow read: if signedIn();

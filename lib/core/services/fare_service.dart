@@ -20,11 +20,9 @@ class FareService {
   /// receipts that recorded no rates of their own.
   static const double minimumFare = 35.0;
   static const double ratePerKm = 10.0;
-  static const double pickupFee = 15.0;
 
   double get currentMinimumFare => rates.minimumFare;
   double get currentRatePerKm => rates.ratePerKm;
-  double get currentPickupFee => rates.pickupFee;
 
   double calculateFare(LatLng pickup, LatLng dropoff) {
     final distanceInKm = calculateDistance(pickup, dropoff);

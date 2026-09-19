@@ -83,7 +83,11 @@ service cloud.firestore {
       return request.resource.data.get('isVerified', null) == resource.data.get('isVerified', null)
         && request.resource.data.get('verificationStatus', null) == resource.data.get('verificationStatus', null)
         && request.resource.data.get('role', null) == resource.data.get('role', null)
-        && request.resource.data.get('isActive', true) == resource.data.get('isActive', true);
+        && request.resource.data.get('isActive', true) == resource.data.get('isActive', true)
+        // A driver's name was checked against their ID when they were
+        // approved; only an admin changes it. Passengers keep editing theirs.
+        && (resource.data.get('role', '') != 'driver'
+            || request.resource.data.get('name', null) == resource.data.get('name', null));
     }
 
     // Terminals — public read so the registration screen can list them

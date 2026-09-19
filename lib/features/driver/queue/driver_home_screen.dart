@@ -2860,60 +2860,6 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
     }
   }
 
-  void _showEditNameDialog(BuildContext context) {
-    final nameController = TextEditingController();
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-
-    // Pre-fill existing name
-    FirebaseFirestore.instance.collection('users').doc(uid).get().then((doc) {
-      nameController.text = doc.data()?['name'] ?? '';
-    });
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Edit Name'),
-        content: TextField(
-          controller: nameController,
-          decoration: const InputDecoration(
-            labelText: 'Full Name',
-            prefixIcon: Icon(Icons.person_outlined),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              if (nameController.text.trim().isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Name cannot be empty')),
-                );
-                return;
-              }
-              await FirebaseFirestore.instance
-                  .collection('users')
-                  .doc(uid)
-                  .update({'name': nameController.text.trim()});
-              if (ctx.mounted) Navigator.pop(ctx);
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('✅ Name updated!')),
-                );
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.primaryGreen,
-            ),
-            child: const Text('Save', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _showEditPhoneDialog(BuildContext context) {
     final phoneController = TextEditingController();
     final uid = FirebaseAuth.instance.currentUser!.uid;
@@ -3945,12 +3891,32 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // A driver's name is the one checked against their ID when
+                  // they were approved, so only an admin changes it. Letting
+                  // the driver edit it meant the approved name and the one
+                  // passengers see could drift apart unreviewed.
                   ListTile(
                     leading: const Icon(Icons.person_outlined),
                     title: const Text('Full Name'),
                     subtitle: Text(data?['name'] ?? ''),
-                    trailing: const Icon(Icons.edit, size: 16),
-                    onTap: () => _showEditNameDialog(context),
+                    trailing: const Icon(Icons.lock_outline, size: 16),
+                    onTap: () => showDialog<void>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Name is locked'),
+                        content: const Text(
+                          'Your name was checked against your ID when you '
+                          'were approved, so it can only be changed by your '
+                          'TODA admin. Ask them to update it.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text('OK'),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                   const Divider(height: 1, indent: 16, endIndent: 16),
                   ListTile(

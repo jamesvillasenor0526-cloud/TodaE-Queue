@@ -102,6 +102,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   @override
   void dispose() {
     _activeBookingSub?.cancel();
+    _profileSub?.cancel();
     _positionSub?.cancel();
     _pushTimer?.cancel();
     _heartbeat?.cancel();
@@ -135,20 +136,57 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     onShown: () => _setOnline(true),
   );
 
-  Future<void> _loadProfile() async {
-    try {
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .get();
-      if (!mounted) return;
-      setState(() {
-        _assignedTerminalId = doc.data()?['assignedTerminalId'] as String?;
-        _profileLoaded = true;
-      });
-    } catch (e) {
-      debugPrint('Could not read the driver profile: $e');
-    }
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _profileSub;
+  bool _disabledShown = false;
+
+  /// Follows the driver's own profile rather than reading it once, so what
+  /// an admin changes from the dashboard applies while the app is open: a
+  /// new assigned terminal is used for the very next check-in, and a
+  /// disabled account is signed out rather than left driving until the app
+  /// happens to restart.
+  void _loadProfile() {
+    _profileSub = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .snapshots()
+        .listen((doc) {
+          if (!mounted) return;
+          final data = doc.data();
+          if (data?['isActive'] == false) {
+            _onDisabled();
+            return;
+          }
+          setState(() {
+            _assignedTerminalId = data?['assignedTerminalId'] as String?;
+            _profileLoaded = true;
+          });
+        }, onError: (Object e) => debugPrint('Driver profile: $e'));
+  }
+
+  Future<void> _onDisabled() async {
+    if (_disabledShown) return;
+    _disabledShown = true;
+    _setOnline(false);
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Account disabled'),
+        content: const Text(
+          'Your TODA admin has disabled this account. You have been taken '
+          'out of the queue. Contact them to have it turned back on.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    await FirebaseAuth.instance.signOut();
+    if (!mounted) return;
+    Navigator.pushNamedAndRemoveUntil(context, AppRoutes.login, (_) => false);
   }
 
   void _watchActiveBooking() {

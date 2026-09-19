@@ -43,6 +43,13 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
         return;
       }
 
+      // An admin can disable an account from the dashboard. It stays in the
+      // records — trips, ratings, receipts — but the app is closed to it.
+      if (doc.data()?['isActive'] == false) {
+        _showDisabledMessage();
+        return;
+      }
+
       final role = doc.data()?['role'] ?? 'passenger';
 
       switch (role) {
@@ -63,6 +70,29 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
         Navigator.pushReplacementNamed(context, AppRoutes.login);
       }
     }
+  }
+
+  void _showDisabledMessage() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: const Text('Account disabled'),
+        content: const Text(
+          'This account has been disabled by your TODA admin. '
+          'Contact them to have it turned back on.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              FirebaseAuth.instance.signOut();
+              Navigator.pushReplacementNamed(context, AppRoutes.login);
+            },
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showAdminMessage() {

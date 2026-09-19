@@ -71,11 +71,19 @@ service cloud.firestore {
         || b.get('status', '') == 'completed';
     }
 
-    // Approval and role must survive a self-update untouched.
+    // Approval, role and whether the account is enabled must survive a
+    // self-update untouched — a disabled driver cannot switch themselves
+    // back on.
+    //
+    // Read with get(): a profile missing one of these fields — four of the
+    // live ones lack verificationStatus — made the comparison an error, and
+    // an error denies, so those people could not save anything on their own
+    // profile at all.
     function keepsApprovalFields() {
-      return request.resource.data.isVerified == resource.data.isVerified
-        && request.resource.data.verificationStatus == resource.data.verificationStatus
-        && request.resource.data.role == resource.data.role;
+      return request.resource.data.get('isVerified', null) == resource.data.get('isVerified', null)
+        && request.resource.data.get('verificationStatus', null) == resource.data.get('verificationStatus', null)
+        && request.resource.data.get('role', null) == resource.data.get('role', null)
+        && request.resource.data.get('isActive', true) == resource.data.get('isActive', true);
     }
 
     // Terminals — public read so the registration screen can list them
@@ -158,10 +166,15 @@ service cloud.firestore {
     // place, which is the damaging case: only the entry's own driver, or
     // an admin, may take it out of the queue.
     match /queueEntries/{entryId} {
+      // Approved, and not disabled from the dashboard. Checked here so a
+      // disabled driver cannot rejoin the queue from an app that predates
+      // the disabled screen.
       function isApprovedDriver() {
         return exists(/databases/$(database)/documents/users/$(request.auth.uid))
           && get(/databases/$(database)/documents/users/$(request.auth.uid))
-               .data.get('isVerified', false) == true;
+               .data.get('isVerified', false) == true
+          && get(/databases/$(database)/documents/users/$(request.auth.uid))
+               .data.get('isActive', true) != false;
       }
 
       function mine() {

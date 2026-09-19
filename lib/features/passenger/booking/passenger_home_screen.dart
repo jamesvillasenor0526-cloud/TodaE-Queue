@@ -107,16 +107,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
             // The map picks a terminal; booking from it is the same flow
             // as from the list.
             onPressed: () async {
-              final picked = await Navigator.pushNamed<Map<String, String>>(
+              // Untyped on purpose: the route table builds
+              // MaterialPageRoute<dynamic>, and asking for a typed result
+              // made pushNamed throw before the map ever opened.
+              final picked = await Navigator.pushNamed(
                 context,
                 AppRoutes.terminalMap,
               );
-              if (picked == null || !context.mounted) return;
-              await _bookFromTerminal(
-                context,
-                picked['terminalId']!,
-                picked['terminalName']!,
-              );
+              if (picked is! Map || !context.mounted) return;
+              final id = picked['terminalId'], name = picked['terminalName'];
+              if (id is! String || name is! String) return;
+              await _bookFromTerminal(context, id, name);
             },
             backgroundColor: AppTheme.primaryBlue,
             child: const Icon(Icons.map, color: Colors.white),

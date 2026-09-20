@@ -4243,6 +4243,21 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
                         Navigator.pushNamed(context, AppRoutes.myTickets),
                   ),
                   const Divider(height: 1, indent: 16, endIndent: 16),
+                  // The fares a driver is quoting. Only passengers could
+                  // open this, which is the wrong way round: a driver is
+                  // the one asked "magkano?" at the terminal.
+                  ListTile(
+                    leading: const Icon(
+                      Icons.monetization_on_outlined,
+                      color: AppTheme.primaryGreen,
+                    ),
+                    title: const Text('Fare Matrix'),
+                    subtitle: const Text('The fares in force right now'),
+                    trailing: const Icon(Icons.chevron_right, size: 18),
+                    onTap: () =>
+                        Navigator.pushNamed(context, AppRoutes.fareMatrix),
+                  ),
+                  const Divider(height: 1, indent: 16, endIndent: 16),
                   ListTile(
                     leading: const Icon(Icons.help_outlined),
                     title: const Text('Help Topics'),

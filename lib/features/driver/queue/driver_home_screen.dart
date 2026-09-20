@@ -2082,17 +2082,23 @@ class _DriverMapTabState extends State<_DriverMapTab> {
     _startWatchingSelf();
   }
 
-  Future<void> _loadAssignedTerminal() async {
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _profileSub;
+
+  /// Follows the profile, so a terminal an admin reassigns is highlighted
+  /// here straight away. Read once, this map went on marking the old
+  /// terminal as theirs until the app was restarted.
+  void _loadAssignedTerminal() {
     final uid = FirebaseAuth.instance.currentUser!.uid;
-    final doc = await FirebaseFirestore.instance
+    _profileSub = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
-        .get();
-    if (mounted) {
-      setState(() {
-        _assignedTerminalName = doc.data()?['assignedTerminalName'];
-      });
-    }
+        .snapshots()
+        .listen((doc) {
+          if (!mounted) return;
+          setState(() {
+            _assignedTerminalName = doc.data()?['assignedTerminalName'];
+          });
+        }, onError: (Object e) => debugPrint('Map tab: profile ($e)'));
   }
 
   @override
@@ -2137,6 +2143,7 @@ class _DriverMapTabState extends State<_DriverMapTab> {
   @override
   void dispose() {
     _positionSub?.cancel();
+    _profileSub?.cancel();
     super.dispose();
   }
 

@@ -472,9 +472,40 @@ service cloud.firestore {
         && request.resource.data.description.size() > 0
         && request.resource.data.description.size() <= 2000;
 
-      // Answering and closing a ticket is an admin's job.
-      allow update: if isAdmin();
+      // Closing a ticket is an admin's job. The person who raised it may
+      // only nudge it back to open when they reply — a ticket they are
+      // still talking about is not resolved.
+      allow update: if isAdmin()
+        || (signedIn()
+            && resource.data.get('userId', '') == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['status', 'lastMessageAt', 'lastFrom'])
+            && request.resource.data.get('status', '') == 'open');
+
       allow delete: if false;
+
+      // The conversation on a ticket: the person who raised it and the
+      // admins answering. Each message says who wrote it, and nobody can
+      // write as the other side or change what was said.
+      match /messages/{messageId} {
+        function mine() {
+          return get(/databases/$(database)/documents/tickets/$(ticketId))
+                   .data.get('userId', '') == request.auth.uid;
+        }
+
+        allow read: if signedIn() && (mine() || isAdmin());
+
+        allow create: if signedIn()
+          && (mine() || isAdmin())
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 2000
+          && request.resource.data.from == (isAdmin() ? 'admin' : 'user')
+          && request.resource.data.createdAt == request.time;
+
+        // A conversation is a record: nothing is edited or taken back.
+        allow update, delete: if false;
+      }
     }
 
     // Default — deny all other access

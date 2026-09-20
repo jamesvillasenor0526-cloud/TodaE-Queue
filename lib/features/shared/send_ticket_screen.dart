@@ -58,6 +58,13 @@ class _SendTicketScreenState extends State<SendTicketScreen> {
 
     try {
       final user = FirebaseAuth.instance.currentUser!;
+      // The profile name: displayName is never set on these accounts, so
+      // every ticket used to reach the dashboard as "From: User".
+      final profile = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      final name = (profile.data()?['name'] as String?)?.trim();
       String? screenshotUrl;
 
       // Upload screenshot if provided
@@ -71,7 +78,7 @@ class _SendTicketScreenState extends State<SendTicketScreen> {
       // Save ticket to Firestore
       await FirebaseFirestore.instance.collection('tickets').add({
         'userId': user.uid,
-        'userName': user.displayName ?? 'User',
+        'userName': (name != null && name.isNotEmpty) ? name : 'User',
         'subject': _subjectController.text.trim(),
         'description': _descriptionController.text.trim(),
         'screenshotUrl': screenshotUrl,

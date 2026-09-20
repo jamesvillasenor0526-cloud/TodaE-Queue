@@ -4226,6 +4226,20 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
                         Navigator.pushNamed(context, AppRoutes.sendTicket),
                   ),
                   const Divider(height: 1, indent: 16, endIndent: 16),
+                  // Where an admin's answer arrives: without this, a reply
+                  // written in the dashboard had nowhere to appear.
+                  ListTile(
+                    leading: const Icon(
+                      Icons.support_agent,
+                      color: AppTheme.info,
+                    ),
+                    title: const Text('My tickets'),
+                    subtitle: const Text('Your messages with your TODA admin'),
+                    trailing: const Icon(Icons.chevron_right, size: 18),
+                    onTap: () =>
+                        Navigator.pushNamed(context, AppRoutes.myTickets),
+                  ),
+                  const Divider(height: 1, indent: 16, endIndent: 16),
                   ListTile(
                     leading: const Icon(Icons.help_outlined),
                     title: const Text('Help Topics'),

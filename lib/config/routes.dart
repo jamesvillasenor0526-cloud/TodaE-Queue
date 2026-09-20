@@ -15,6 +15,7 @@ import '../features/auth/screens/forgot_password_screen.dart';
 import '../features/auth/screens/verify_email_screen.dart';
 import '../features/passenger/booking/fare_matrix_screen.dart';
 import '../features/shared/send_ticket_screen.dart';
+import '../features/shared/my_tickets_screen.dart';
 import '../features/shared/about_screen.dart';
 
 class AppRoutes {
@@ -35,6 +36,7 @@ class AppRoutes {
   static const String verifyEmail = '/verify-email';
   static const String fareMatrix = '/fare-matrix';
   static const String sendTicket = '/send-ticket';
+  static const String myTickets = '/my-tickets';
   static const String about = '/about';
 
   static Route<dynamic> generateRoute(RouteSettings settings) {
@@ -61,6 +63,8 @@ class AppRoutes {
         return MaterialPageRoute(builder: (_) => const VerifyEmailScreen());
       case fareMatrix:
         return MaterialPageRoute(builder: (_) => const FareMatrixScreen());
+      case myTickets:
+        return MaterialPageRoute(builder: (_) => const MyTicketsScreen());
       case sendTicket:
         return MaterialPageRoute(builder: (_) => const SendTicketScreen());
       case about:

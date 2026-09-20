@@ -1,7 +1,7 @@
 name: toda_equeue_plus
 description: "TODA E-QUEUE+ - A Geo-Fenced Queue, Booking, and Safety Management System"
 publish_to: 'none'
-version: 1.6.23+42
+version: 1.6.24+43
 
 environment:
   sdk: '^3.12.0'

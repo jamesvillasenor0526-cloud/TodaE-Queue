@@ -326,7 +326,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Trip cancelled.')));
-        Navigator.pushReplacementNamed(context, AppRoutes.passengerHome);
+        Navigator.popUntil(context, (r) => r.isFirst);
       }
     } catch (e) {
       if (context.mounted) {
@@ -391,33 +391,13 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Trip Tracking'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () async {
-            final confirm = await showDialog<bool>(
-              context: context,
-              builder: (ctx) => AlertDialog(
-                title: const Text('Leave Tracking?'),
-                content: const Text(
-                  'Are you sure you want to leave the trip tracking screen?',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx, false),
-                    child: const Text('Stay'),
-                  ),
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx, true),
-                    child: const Text('Leave'),
-                  ),
-                ],
-              ),
-            );
-            if (confirm == true && context.mounted) {
-              Navigator.pushReplacementNamed(context, AppRoutes.passengerHome);
-            }
-          },
-        ),
+        // Plain back, and the same as the phone's back button.
+        //
+        // It used to ask "Leave Tracking?" and then *replace* this screen
+        // with a second home screen stacked on the first — so the app had
+        // two homes, and back from the new one offered to close the app
+        // rather than returning. Leaving is harmless anyway: the trip runs
+        // on, and the banner on the home screen comes straight back here.
       ),
       body: StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance
@@ -798,9 +778,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                         // passenger, which landed on neither of them.
                         onPressed: () {
                           _mapController.move(
-                            _driverDrawnAt.value ??
-                                driverPosition ??
-                                mapCenter,
+                            _driverDrawnAt.value ?? driverPosition ?? mapCenter,
                             16,
                           );
                         },
@@ -954,10 +932,8 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                 Padding(
                   padding: const EdgeInsets.all(16),
                   child: ElevatedButton(
-                    onPressed: () => Navigator.pushReplacementNamed(
-                      context,
-                      AppRoutes.passengerHome,
-                    ),
+                    onPressed: () =>
+                        Navigator.popUntil(context, (r) => r.isFirst),
                     child: const Text('Back to Home'),
                   ),
                 )

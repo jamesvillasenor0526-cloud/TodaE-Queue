@@ -48,7 +48,7 @@ class NotificationService {
 
     await _plugin.show(
       1,
-      '🚖 You have been dispatched!',
+      'You have been dispatched!',
       'A passenger is waiting. Head to the pickup point.',
       details,
       payload: 'dispatch',
@@ -103,7 +103,7 @@ class NotificationService {
 
     await _plugin.show(
       3,
-      '📋 Queue Update',
+      'Queue Update',
       'You are #$position in queue at $terminalName.',
       details,
       payload: 'queue',

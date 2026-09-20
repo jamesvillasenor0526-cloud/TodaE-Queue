@@ -120,7 +120,7 @@ class GeocodingService {
           'https://nominatim.openstreetmap.org/reverse'
           '?lat=$lat&lon=$lng&format=json';
 
-      debugPrint('🔍 Fetching place name for: $lat, $lng');
+      debugPrint('Fetching place name for: $lat, $lng');
 
       // Timed out rather than left open: a reverse lookup that never
       // returns leaves "Loading..." as a place name for the whole trip.
@@ -128,11 +128,11 @@ class GeocodingService {
           .get(Uri.parse(url), headers: {'User-Agent': 'TODA-EQueue/1.0'})
           .timeout(const Duration(seconds: 8));
 
-      debugPrint('🔍 Response status: ${response.statusCode}');
+      debugPrint('Response status: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        debugPrint('🔍 Response data: ${data['display_name']}');
+        debugPrint('Response data: ${data['display_name']}');
 
         final displayName = data['display_name'] as String?;
         if (displayName != null) {
@@ -141,7 +141,7 @@ class GeocodingService {
         }
       }
     } catch (e) {
-      debugPrint('❌ Nominatim error: $e');
+      debugPrint('Nominatim error: $e');
     }
     return 'Location';
   }

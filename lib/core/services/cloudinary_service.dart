@@ -31,14 +31,14 @@ class CloudinaryService {
 
       if (response.statusCode == 200) {
         debugPrint(
-          '✅ Cloudinary upload success: ${jsonResponse['secure_url']}',
+          'Cloudinary upload success: ${jsonResponse['secure_url']}',
         );
         return jsonResponse['secure_url'];
       }
-      debugPrint('❌ Cloudinary upload failed: $responseData');
+      debugPrint('Cloudinary upload failed: $responseData');
       return null;
     } catch (e) {
-      debugPrint('❌ Cloudinary upload error: $e');
+      debugPrint('Cloudinary upload error: $e');
       return null;
     }
   }

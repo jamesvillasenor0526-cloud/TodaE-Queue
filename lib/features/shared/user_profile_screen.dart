@@ -227,9 +227,9 @@ class UserProfileScreen extends StatelessWidget {
                   child: Text(
                     role == 'driver'
                         ? (isVerified
-                              ? '✅ Verified Driver'
-                              : '⏳ Pending Verification')
-                        : '👤 Passenger',
+                              ? 'Verified Driver'
+                              : 'Pending Verification')
+                        : 'Passenger',
                     style: TextStyle(
                       color: role == 'driver'
                           ? (isVerified ? AppTheme.success : AppTheme.warning)

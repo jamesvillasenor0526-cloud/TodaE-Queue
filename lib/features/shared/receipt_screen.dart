@@ -166,18 +166,18 @@ class ReceiptScreen extends StatelessWidget {
                 // Payment
                 _receiptRow(
                   'Payment Method',
-                  receipt['paymentMethod'] == 'gcash' ? '📱 GCash' : '💵 Cash',
+                  receipt['paymentMethod'] == 'gcash' ? 'GCash' : 'Cash',
                 ),
                 const SizedBox(height: 4),
                 _receiptRow(
                   'Status',
-                  receipt['paymentStatus'] == 'paid' ? '✅ Paid' : '⏳ Pending',
+                  receipt['paymentStatus'] == 'paid' ? 'Paid' : 'Pending',
                 ),
                 const SizedBox(height: 4),
                 if (receipt['driverConfirmed'] == true)
-                  _receiptRow('Driver Confirmed', '✅ Yes')
+                  _receiptRow('Driver Confirmed', 'Yes')
                 else
-                  _receiptRow('Driver Confirmed', '⏳ Waiting'),
+                  _receiptRow('Driver Confirmed', 'Waiting'),
 
                 const Divider(height: 32),
 
@@ -186,7 +186,7 @@ class ReceiptScreen extends StatelessWidget {
                   child: Column(
                     children: [
                       Text(
-                        'Thank you for riding! 🚖',
+                        'Thank you for riding!',
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w500,

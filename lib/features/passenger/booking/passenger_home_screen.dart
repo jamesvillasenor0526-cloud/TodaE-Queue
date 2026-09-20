@@ -200,9 +200,9 @@ class _HomeTabState extends State<_HomeTab> {
         _terminalDistances = distances;
         _isCalculatingDistances = false;
       });
-      debugPrint('🔍 Distances calculated: ${distances.length}');
+      debugPrint('Distances calculated: ${distances.length}');
       distances.forEach((id, dist) {
-        debugPrint('🔍 $id: $dist km');
+        debugPrint('$id: $dist km');
       });
     }
   }
@@ -347,7 +347,7 @@ class _HomeTabState extends State<_HomeTab> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Hello, $firstName! 👋',
+                      'Hello, $firstName!',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 22,
@@ -458,7 +458,7 @@ class _HomeTabState extends State<_HomeTab> {
 
                   if (_terminalDistances.isEmpty && !_isCalculatingDistances) {
                     debugPrint(
-                      '🔍 Calculating distances for ${terminals.length} terminals',
+                      'Calculating distances for ${terminals.length} terminals',
                     );
                     _calculateDistances(terminals);
                   }
@@ -507,8 +507,8 @@ class _HomeTabState extends State<_HomeTab> {
                               if (distance != null)
                                 Text(
                                   distance < 1.0
-                                      ? '📍 ${(distance * 1000).toStringAsFixed(0)} m away'
-                                      : '📍 ${distance.toStringAsFixed(2)} km away',
+                                      ? '${(distance * 1000).toStringAsFixed(0)} m away'
+                                      : '${distance.toStringAsFixed(2)} km away',
                                   style: const TextStyle(
                                     fontSize: 11,
                                     color: AppTheme.info,
@@ -898,18 +898,18 @@ class _TerminalSheetState extends State<_TerminalSheet> {
   }
 
   Future<void> _getPlaceNames() async {
-    debugPrint('🟢 Getting place names...');
+    debugPrint('Getting place names...');
     _pickupName = await GeocodingService.instance.getPlaceName(
       widget.pickupLat,
       widget.pickupLng,
     );
-    debugPrint('🟢 Pickup name: $_pickupName');
+    debugPrint('Pickup name: $_pickupName');
 
     _destinationName = await GeocodingService.instance.getPlaceName(
       widget.destinationLat,
       widget.destinationLng,
     );
-    debugPrint('🟢 Destination name: $_destinationName');
+    debugPrint('Destination name: $_destinationName');
 
     if (mounted) setState(() {});
   }
@@ -967,7 +967,7 @@ class _TerminalSheetState extends State<_TerminalSheet> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
-                '💰 Total Fare',
+                'Total Fare',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
               Text(
@@ -1002,7 +1002,7 @@ class _TerminalSheetState extends State<_TerminalSheet> {
             width: double.infinity,
             child: ElevatedButton.icon(
               onPressed: () {
-                debugPrint('🟢 Book button tapped!'); // ADD THIS
+                debugPrint('Book button tapped!'); // ADD THIS
                 if (!_isBooking) _bookRide();
               },
               icon: _isBooking
@@ -1205,7 +1205,7 @@ class _TerminalSheetScreenState extends State<_TerminalSheetScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text(
-                          '💰 Total Fare',
+                          'Total Fare',
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
@@ -1516,7 +1516,7 @@ class _ProfileTabState extends State<_ProfileTab> {
                 if (ctx.mounted) Navigator.pop(ctx);
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('✅ Photo removed!')),
+                    const SnackBar(content: Text('Photo removed!')),
                   );
                 }
               },
@@ -1555,7 +1555,7 @@ class _ProfileTabState extends State<_ProfileTab> {
       });
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ Profile photo updated!')),
+          const SnackBar(content: Text('Profile photo updated!')),
         );
       }
     }
@@ -1601,7 +1601,7 @@ class _ProfileTabState extends State<_ProfileTab> {
               if (ctx.mounted) Navigator.pop(ctx);
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('✅ Name updated!')),
+                  const SnackBar(content: Text('Name updated!')),
                 );
               }
             },
@@ -1664,7 +1664,7 @@ class _ProfileTabState extends State<_ProfileTab> {
               if (ctx.mounted) Navigator.pop(ctx);
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('✅ Phone updated!')),
+                  const SnackBar(content: Text('Phone updated!')),
                 );
               }
             },
@@ -1715,7 +1715,7 @@ class _ProfileTabState extends State<_ProfileTab> {
               if (ctx.mounted) Navigator.pop(ctx);
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('✅ Location updated!')),
+                  const SnackBar(content: Text('Location updated!')),
                 );
               }
             },
@@ -1862,7 +1862,7 @@ class _ProfileTabState extends State<_ProfileTab> {
                       Navigator.pop(ctx);
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('✅ Password changed successfully!'),
+                          content: Text('Password changed successfully!'),
                         ),
                       );
                     }
@@ -2255,7 +2255,7 @@ class _ProfileTabState extends State<_ProfileTab> {
 
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('✅ Thanks — your suggestion was sent.')),
+        const SnackBar(content: Text('Thanks — your suggestion was sent.')),
       );
     }
   }

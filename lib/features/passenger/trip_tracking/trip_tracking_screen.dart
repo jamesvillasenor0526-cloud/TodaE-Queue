@@ -494,7 +494,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                     _mapController.move(_passengerPosition!, 16);
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
-                        content: Text('📍 Your location'),
+                        content: Text('Your location'),
                         duration: Duration(seconds: 1),
                       ),
                     );
@@ -523,7 +523,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                     _mapController.move(pickupPoint, 16);
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
-                        content: Text('📍 Pickup location'),
+                        content: Text('Pickup location'),
                         duration: Duration(seconds: 1),
                       ),
                     );
@@ -552,7 +552,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                     _mapController.move(destinationPoint, 16);
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
-                        content: Text('📍 Destination'),
+                        content: Text('Destination'),
                         duration: Duration(seconds: 1),
                       ),
                     );

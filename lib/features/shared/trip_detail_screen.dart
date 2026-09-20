@@ -308,8 +308,8 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                           icon: Icons.payment,
                           title: 'Payment Method',
                           value: data['paymentMethod'] == 'gcash'
-                              ? '📱 GCash'
-                              : '💵 Cash',
+                              ? 'GCash'
+                              : 'Cash',
                         ),
                       ],
                       // Payment status

@@ -318,7 +318,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Text(
-                    '📍 Search above, or tap the map to set your destination',
+                    'Search above, or tap the map to set your destination',
                     style: TextStyle(color: Colors.white, fontSize: 13),
                     textAlign: TextAlign.center,
                   ),
@@ -355,7 +355,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text(
-                          '🏁 Terminal → Pickup',
+                          'Terminal → Pickup',
                           style: TextStyle(
                             fontSize: 13,
                             color: AppTheme.textMuted,
@@ -378,7 +378,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text(
-                          '📏 Pickup → Destination',
+                          'Pickup → Destination',
                           style: TextStyle(
                             fontSize: 13,
                             color: AppTheme.textMuted,
@@ -401,7 +401,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text(
-                          '📏 Total Distance',
+                          'Total Distance',
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.bold,
@@ -425,7 +425,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                         children: [
                           Expanded(
                             child: Text(
-                              '🚏 Outside Baliwag '
+                              'Outside Baliwag '
                               '(${_outOfTown.kmOutside.toStringAsFixed(1)} km)',
                               style: const TextStyle(
                                 fontSize: 13,
@@ -449,7 +449,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text(
-                          '💰 Total Fare',
+                          'Total Fare',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,

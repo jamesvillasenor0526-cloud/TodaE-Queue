@@ -204,7 +204,7 @@ class _PickupLocationScreenState extends State<PickupLocationScreen> {
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: const Text(
-                          '📍 Search above, or tap the map to set your pickup '
+                          'Search above, or tap the map to set your pickup '
                           'location',
                           style: TextStyle(color: Colors.white, fontSize: 13),
                           textAlign: TextAlign.center,
@@ -230,7 +230,7 @@ class _PickupLocationScreenState extends State<PickupLocationScreen> {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: const Text(
-                        '⚠️ GPS unavailable. Tap the map to set your pickup spot.',
+                        'GPS unavailable. Tap the map to set your pickup spot.',
                         style: TextStyle(color: Colors.white, fontSize: 12),
                         textAlign: TextAlign.center,
                       ),

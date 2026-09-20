@@ -454,9 +454,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Future<void> _onPositionUpdate(Position position) async {
-    debugPrint('📍 GPS STREAM: ${position.latitude}, ${position.longitude}');
+    debugPrint('GPS STREAM: ${position.latitude}, ${position.longitude}');
     debugPrint(
-      '📍 _hasActiveEntry=$_hasActiveEntry, _activeBookingId=$_activeBookingId',
+      '_hasActiveEntry=$_hasActiveEntry, _activeBookingId=$_activeBookingId',
     );
 
     _pushLocation(position);
@@ -932,7 +932,7 @@ class _QueueTab extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Hello, $firstName! 🚖',
+                    'Hello, $firstName!',
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 22,
@@ -1058,7 +1058,7 @@ class _QueueTab extends StatelessWidget {
 
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     debugPrint(
-                      '📋 Queue entry: status=${activeData?['status']}, bookingId=$bookingId',
+                      'Queue entry: status=${activeData?['status']}, bookingId=$bookingId',
                     );
                     onActiveEntryChanged(
                       activeEntry != null,
@@ -1262,7 +1262,7 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
       }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('✅ Booking accepted!'),
+          content: Text('Booking accepted!'),
           backgroundColor: AppTheme.success,
         ),
       );
@@ -1348,11 +1348,11 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
         } else if (estimatedMinutes > 0) {
           estimatedWait = '~$estimatedMinutes min';
         } else {
-          estimatedWait = "You're next! 🎉";
+          estimatedWait = "You're next!";
         }
         String nextDriver = 'You';
         if (position == 1) {
-          nextDriver = 'You are next! 🎯';
+          nextDriver = 'You are next!';
         } else if (waitingDocs.isNotEmpty) {
           final d = waitingDocs.first.data() as Map<String, dynamic>? ?? {};
           nextDriver = '${d['driverName'] ?? 'Driver'} is next';
@@ -1516,13 +1516,23 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
                                       children: [
-                                        const Text(
-                                          '💰 FARE DETAILS',
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.bold,
-                                            color: AppTheme.primaryBlue,
-                                          ),
+                                        const Row(
+                                          children: [
+                                            Icon(
+                                              Icons.payments_outlined,
+                                              size: 14,
+                                              color: AppTheme.primaryBlue,
+                                            ),
+                                            SizedBox(width: 6),
+                                            Text(
+                                              'FARE DETAILS',
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                                color: AppTheme.primaryBlue,
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                         const SizedBox(height: 8),
                                         _fareRow(
@@ -1572,7 +1582,7 @@ class _ActiveQueueViewState extends State<_ActiveQueueView> {
                                             Expanded(
                                               child: Text(
                                                 paymentStatus == 'paid'
-                                                    ? '✅ Passenger paid: ₱${fare.toStringAsFixed(0)} via ${paymentMethod == 'gcash' ? 'GCash' : 'Cash'}'
+                                                    ? 'Passenger paid: ₱${fare.toStringAsFixed(0)} via ${paymentMethod == 'gcash' ? 'GCash' : 'Cash'}'
                                                     : 'Payment due after the trip ends',
                                                 style: TextStyle(
                                                   color: paymentStatus == 'paid'
@@ -2671,14 +2681,14 @@ class _DriverHistoryTabState extends State<_DriverHistoryTab> {
                                       Icons.payment,
                                       'Status',
                                       isPaid
-                                          ? '✅ Paid${paymentMethod == 'gcash'
+                                          ? 'Paid${paymentMethod == 'gcash'
                                                 ? ' (GCash)'
                                                 : paymentMethod == 'cash'
                                                 ? ' (Cash)'
                                                 : ''}'
                                           : paymentMethod == 'cash'
-                                          ? '⏳ Awaiting cash confirmation'
-                                          : '⏳ Awaiting passenger payment',
+                                          ? 'Awaiting cash confirmation'
+                                          : 'Awaiting passenger payment',
                                     ),
                                   ],
                                   if (!isPaid && paymentMethod == 'cash')
@@ -2701,7 +2711,7 @@ class _DriverHistoryTabState extends State<_DriverHistoryTab> {
                                               ).showSnackBar(
                                                 const SnackBar(
                                                   content: Text(
-                                                    '✅ Cash payment confirmed!',
+                                                    'Cash payment confirmed!',
                                                   ),
                                                 ),
                                               );
@@ -2903,7 +2913,7 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
                 if (ctx.mounted) Navigator.pop(ctx);
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('✅ Photo removed!')),
+                    const SnackBar(content: Text('Photo removed!')),
                   );
                 }
               },
@@ -2941,9 +2951,9 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
         'profilePhotoUrl': url,
       });
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ Profile photo updated!')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Profile photo updated!')));
       }
     }
   }
@@ -2996,9 +3006,9 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
               await ContactService.instance.save(uid, Contact(phone: phone));
               if (ctx.mounted) Navigator.pop(ctx);
               if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('✅ Phone updated!')),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('Phone updated!')));
               }
             },
             style: ElevatedButton.styleFrom(
@@ -3048,7 +3058,7 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
               if (ctx.mounted) Navigator.pop(ctx);
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('✅ Location updated!')),
+                  const SnackBar(content: Text('Location updated!')),
                 );
               }
             },
@@ -3195,7 +3205,7 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
                       Navigator.pop(ctx);
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('✅ Password changed successfully!'),
+                          content: Text('Password changed successfully!'),
                         ),
                       );
                     }
@@ -3574,7 +3584,7 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('✅ GCash QR uploaded!')));
+        ).showSnackBar(const SnackBar(content: Text('GCash QR uploaded!')));
       }
     }
   }
@@ -3929,10 +3939,10 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
                 // Rejected used to read "Pending Verification" here too.
                 child: Text(
                   isVerified
-                      ? '✅ Verified Driver'
+                      ? 'Verified Driver'
                       : data?['verificationStatus'] == 'rejected'
-                      ? '✖ Not approved — see your Queue tab'
-                      : '⏳ Pending Verification',
+                      ? 'Not approved — see your Queue tab'
+                      : 'Pending Verification',
                   style: TextStyle(
                     color: isVerified
                         ? AppTheme.success
@@ -4141,7 +4151,7 @@ class _DriverProfileTabState extends State<_DriverProfileTab> {
                     title: const Text('GCash Payment QR'),
                     subtitle: Text(
                       data?['gcashQrUrl'] != null
-                          ? '✅ QR Code uploaded'
+                          ? 'QR Code uploaded'
                           : 'No QR code uploaded yet',
                     ),
                   ),

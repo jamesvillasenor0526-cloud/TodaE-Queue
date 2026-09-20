@@ -90,7 +90,7 @@ class _SendTicketScreenState extends State<SendTicketScreen> {
         setState(() => _isSending = false);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('✅ Ticket sent! Admin will review it.'),
+            content: Text('Ticket sent! Admin will review it.'),
             backgroundColor: AppTheme.success,
           ),
         );

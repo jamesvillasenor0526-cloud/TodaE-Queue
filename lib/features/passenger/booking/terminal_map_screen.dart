@@ -150,7 +150,7 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('📍 ${result['name']}'),
+        content: Text('${result['name']}'),
         duration: const Duration(seconds: 1),
       ),
     );
@@ -225,7 +225,7 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              '📍 Nearest: $nearestName (${shortestDistance?.toStringAsFixed(1)} km)',
+              'Nearest: $nearestName (${shortestDistance?.toStringAsFixed(1)} km)',
             ),
             duration: const Duration(seconds: 2),
           ),
@@ -396,7 +396,7 @@ class _TerminalMapScreenState extends State<TerminalMapScreen> {
               child: TextField(
                 controller: _searchController,
                 decoration: InputDecoration(
-                  hintText: '🔍 Search terminal...',
+                  hintText: 'Search terminal...',
                   prefixIcon: const Icon(Icons.search),
                   suffixIcon: _searchController.text.isNotEmpty
                       ? IconButton(

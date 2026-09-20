@@ -88,7 +88,7 @@ class RoutingService {
         if (routes.isNotEmpty) {
           final distanceMeters = (routes[0]['distance'] as num).toDouble();
           final km = distanceMeters / 1000.0;
-          debugPrint('🔍 Driving distance: $km km');
+          debugPrint('Driving distance: $km km');
           return km;
         }
       }
@@ -114,7 +114,7 @@ class RoutingService {
         if (routes.isNotEmpty) {
           final distanceMeters = (routes[0]['distance'] as num).toDouble();
           final km = distanceMeters / 1000.0;
-          debugPrint('🔍 Walking distance: $km km');
+          debugPrint('Walking distance: $km km');
           return km;
         }
       }
@@ -126,7 +126,7 @@ class RoutingService {
     // fare is worked out from this, and a straight line through the blocks
     // undercharges every ride the router could not reach.
     final straight = const Distance().as(LengthUnit.Kilometer, start, end);
-    debugPrint('⚠️ Fallback distance: $straight km (estimated from the line)');
+    debugPrint('Fallback distance: $straight km (estimated from the line)');
     return straightLineRoadEstimate(straight);
   }
 

@@ -981,7 +981,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               const SizedBox(width: 8),
                               Text(
                                 _selfieFile != null && _idPhotoFile != null
-                                    ? 'Verification photos captured ✅'
+                                    ? 'Verification photos captured '
                                     : 'Identity Verification Required',
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,

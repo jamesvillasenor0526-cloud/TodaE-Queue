@@ -80,7 +80,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 child: Column(
                   children: [
                     const Text(
-                      '💳 Pay via GCash',
+                      'Pay via GCash',
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,

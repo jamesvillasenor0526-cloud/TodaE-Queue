@@ -55,13 +55,15 @@ class FareMatrixScreen extends StatelessWidget {
               const SizedBox(height: 32),
 
               _rateCard(
-                title: '🚩 Base Fare',
+                icon: Icons.flag_outlined,
+                title: 'Base Fare',
                 label: 'Minimum Fare (first 1 km)',
                 value: _money(rates.minimumFare),
               ),
               const SizedBox(height: 16),
               _rateCard(
-                title: '📏 Additional Distance',
+                icon: Icons.straighten,
+                title: 'Additional Distance',
                 label: 'Per additional kilometer',
                 value: '${_money(rates.ratePerKm)}/km',
               ),
@@ -77,12 +79,22 @@ class FareMatrixScreen extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        '📋 Sample Fares',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
+                      const Row(
+                        children: [
+                          Icon(
+                            Icons.receipt_long_outlined,
+                            size: 18,
+                            color: AppTheme.primaryGreen,
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            'Sample Fares',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 16),
                       for (final km in _sampleKm) ...[
@@ -134,6 +146,7 @@ class FareMatrixScreen extends StatelessWidget {
   static String _money(double v) => '₱${v.toStringAsFixed(2)}';
 
   Widget _rateCard({
+    required IconData icon,
     required String title,
     required String label,
     required String value,
@@ -145,16 +158,28 @@ class FareMatrixScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              title,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            Row(
+              children: [
+                Icon(icon, size: 18, color: AppTheme.primaryGreen),
+                const SizedBox(width: 8),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(label, style: const TextStyle(color: AppTheme.textMuted)),
-                Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+                Text(
+                  value,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
               ],
             ),
           ],

@@ -1,12 +1,15 @@
-/// Where a rejected driver fixes what the admin pointed out and sends their
-/// details back for review.
+/// The whole app for a rejected driver: why they were turned down, and the
+/// form to put it right.
 ///
-/// Before this, a rejected driver was told only "contact your TODA admin",
-/// with no reason and no way to correct anything — the account was a dead
-/// end. Now the admin's reason is shown at the top, every detail they gave
-/// at registration can be corrected, and the selfie and ID photo can be
-/// taken again. Sending moves the account back to pending; approving is
-/// still only the admin's to do (see `resubmits()` in the security rules).
+/// One screen, not a tab among five. A rejected driver cannot queue, take
+/// trips or be seen by passengers, so the queue, map and history have
+/// nothing to say to them — this is the only thing they can act on, and
+/// they are sent straight here at sign-in.
+///
+/// Before this, a rejection was a dead end: "contact your TODA admin", no
+/// reason, nothing to correct. Sending moves the account back to pending;
+/// approving is still only the admin's to do (see `resubmits()` in the
+/// security rules).
 library;
 
 import 'dart:io';
@@ -16,6 +19,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../config/routes.dart';
 import '../../../config/theme.dart';
 import '../../../core/services/cloudinary_service.dart';
 import '../../../core/services/contact_service.dart';
@@ -126,7 +130,17 @@ class _ResubmitScreenState extends State<ResubmitScreen> {
       });
 
       if (!mounted) return;
-      Navigator.pop(context, true);
+      // Pending now: the ordinary driver home says so while they wait.
+      Navigator.pushNamedAndRemoveUntil(
+        context,
+        AppRoutes.driverHome,
+        (_) => false,
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Sent. Your TODA admin will review it again.'),
+        ),
+      );
     } catch (e) {
       debugPrint('Resubmit failed: $e');
       if (mounted) {
@@ -149,13 +163,52 @@ class _ResubmitScreenState extends State<ResubmitScreen> {
   Widget build(BuildContext context) {
     final reason = _s('rejectionReason');
     return Scaffold(
-      appBar: AppBar(title: const Text('Fix and resubmit')),
+      appBar: AppBar(
+        title: const Text('Registration not approved'),
+        automaticallyImplyLeading: false,
+        actions: [
+          IconButton(
+            tooltip: 'Sign out',
+            onPressed: () async {
+              await FirebaseAuth.instance.signOut();
+              if (context.mounted) {
+                Navigator.pushNamedAndRemoveUntil(
+                  context,
+                  AppRoutes.login,
+                  (_) => false,
+                );
+              }
+            },
+            icon: const Icon(Icons.logout),
+          ),
+        ],
+      ),
       body: Form(
         key: _formKey,
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
-            // What the admin said, first — it is the point of this screen.
+            Center(
+              child: Column(
+                children: [
+                  Image.asset(
+                    'assets/images/toda_equeue_plus_logo.png',
+                    height: 72,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'TODA E-QUEUE+',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            // What the admin said — it is the point of this screen.
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(

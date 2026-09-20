@@ -1,4 +1,4 @@
-/// A rejected driver sees why, and starts from the details they gave.
+/// The one screen a rejected driver gets: the logo, why, and the form.
 library;
 
 import 'package:flutter/material.dart';
@@ -18,13 +18,27 @@ void main() {
       'idNumber': 'V-001',
       'rejectionReason': 'ID photo is blurry',
     });
+    // The app's own logo, so this reads as part of the app, not an error
+    // page, and the title says plainly what happened.
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.text('Registration not approved'), findsOneWidget);
+    // Nothing to go back to: this is the app until they resubmit, with a
+    // way out only by signing out.
+    expect(find.byType(BackButton), findsNothing);
+    expect(find.byTooltip('Sign out'), findsOneWidget);
+
     expect(find.text('ID photo is blurry'), findsOneWidget);
     expect(find.text('Juan Dela Cruz'), findsOneWidget);
     expect(find.text('ABC-123'), findsOneWidget);
     expect(find.text('45'), findsOneWidget);
+    // The rest is below the fold on a test-sized screen.
+    await tester.scrollUntilVisible(
+      find.text('Retake selfie and ID'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('V-001'), findsOneWidget);
     expect(find.text("Voter's ID"), findsOneWidget);
-    expect(find.text('Retake selfie and ID'), findsOneWidget);
   });
 
   testWidgets('says so when no reason was given', (tester) async {

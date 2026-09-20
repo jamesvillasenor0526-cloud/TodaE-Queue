@@ -157,6 +157,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             _onDisabled();
             return;
           }
+          // Rejected while the app is open: over to the screen that says
+          // why, rather than leaving them on a queue they cannot join.
+          if (data?['verificationStatus'] == 'rejected' && mounted) {
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ResubmitScreen(profile: data!),
+              ),
+              (_) => false,
+            );
+            return;
+          }
           setState(() {
             _assignedTerminalId = data?['assignedTerminalId'] as String?;
             _profileLoaded = true;
@@ -1135,7 +1147,10 @@ class _NoQueueView extends StatelessWidget {
   }
 }
 
-/// Where an unapproved driver's account stands.
+/// Where a driver waiting for approval stands.
+///
+/// Only waiting: a rejected driver is sent to [ResubmitScreen] instead,
+/// which is their whole app until they are approved.
 class _VerificationStatusView extends StatelessWidget {
   const _VerificationStatusView({required this.profile});
 
@@ -1143,91 +1158,33 @@ class _VerificationStatusView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rejected = profile['verificationStatus'] == 'rejected';
     final resubmitted = profile['resubmittedAt'] != null;
-    final reason = (profile['rejectionReason'] as String?)?.trim() ?? '';
-
     return Center(
-      child: SingleChildScrollView(
+      child: Padding(
         padding: const EdgeInsets.all(28),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              rejected ? Icons.cancel_outlined : Icons.hourglass_top,
+            const Icon(
+              Icons.hourglass_top,
               size: 64,
-              color: rejected ? AppTheme.errorRed : AppTheme.warning,
+              color: AppTheme.warning,
             ),
             const SizedBox(height: 16),
             Text(
-              rejected
-                  ? 'Your registration was not approved'
-                  : resubmitted
+              resubmitted
                   ? 'Your details were sent back for review'
                   : 'Waiting for approval',
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
-            if (rejected) ...[
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: AppTheme.errorRed.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Reason from your TODA admin',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppTheme.textMuted,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      reason.isEmpty ? 'No reason was given.' : reason,
-                      style: const TextStyle(fontSize: 15),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: () async {
-                  final sent = await Navigator.push<bool>(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ResubmitScreen(profile: profile),
-                    ),
-                  );
-                  if (sent == true && context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Sent. Your TODA admin will review it again.',
-                        ),
-                      ),
-                    );
-                  }
-                },
-                icon: const Icon(Icons.edit_note),
-                label: const Text('Fix and resubmit'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.primaryGreen,
-                  foregroundColor: Colors.white,
-                ),
-              ),
-            ] else
-              const Text(
-                'Your TODA admin is checking your details and photos. You '
-                'can check in at your terminal once you are approved.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: AppTheme.textMuted, fontSize: 14),
-              ),
+            const Text(
+              'Your TODA admin is checking your details and photos. You can '
+              'check in at your terminal once you are approved.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppTheme.textMuted, fontSize: 14),
+            ),
           ],
         ),
       ),

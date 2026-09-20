@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../config/routes.dart';
 import '../../../config/theme.dart';
+import '../../driver/verification/resubmit_screen.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
 class RoleSelectScreen extends StatefulWidget {
@@ -54,6 +55,18 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
 
       switch (role) {
         case 'driver':
+          // A rejected driver has nothing to do in the queue, on the map or
+          // in their history: they go straight to why, and the form to fix
+          // it.
+          if (doc.data()?['verificationStatus'] == 'rejected') {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ResubmitScreen(profile: doc.data()!),
+              ),
+            );
+            break;
+          }
           Navigator.pushReplacementNamed(context, AppRoutes.driverHome);
           break;
         case 'toda_admin':

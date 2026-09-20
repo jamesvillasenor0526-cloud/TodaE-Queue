@@ -10,6 +10,7 @@ import '../../../config/routes.dart';
 import '../../../config/theme.dart';
 import '../../../core/models/location_need.dart';
 import '../../../core/services/fare_service.dart';
+import '../../../widgets/fare_change_notice.dart';
 import '../../../core/services/geofence_service.dart';
 import '../../../core/services/location_hub.dart';
 import '../../../core/services/dispatch_service.dart';
@@ -1012,6 +1013,8 @@ class _QueueTab extends StatelessWidget {
                 ],
               ),
             ),
+            // The fare a driver quotes has to be the one in force.
+            const FareChangeNotice(),
             Expanded(
               child: StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance

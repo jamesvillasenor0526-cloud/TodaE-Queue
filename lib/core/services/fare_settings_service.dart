@@ -16,6 +16,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/fare_rates.dart';
+import 'notification_service.dart';
 import 'fare_service.dart';
 
 class FareSettingsService {
@@ -23,6 +24,16 @@ class FareSettingsService {
   FareSettingsService._();
 
   static const String _prefKey = 'fare_rates';
+
+  /// The last change to the rates, for whatever wants to tell the person
+  /// about it — a passenger who books at the old price and is charged the
+  /// new one has every right to feel cheated, so the app says so instead.
+  /// Cleared once shown.
+  final ValueNotifier<String?> announcement = ValueNotifier(null);
+
+  /// Nothing is announced for the first rates a phone loads: that is not a
+  /// change, it is simply what fares cost.
+  bool _loaded = false;
 
   DocumentReference<Map<String, dynamic>> get _doc =>
       FirebaseFirestore.instance.collection('settings').doc('fare');
@@ -60,8 +71,22 @@ class FareSettingsService {
       (snap) {
         if (!snap.exists) return; // nothing saved yet: defaults stand
         final rates = FareRates.fromMap(snap.data());
+        final before = FareService.instance.rates;
         _apply(rates);
         unawaited(_cache(rates));
+        if (!_loaded) {
+          _loaded = true;
+          return;
+        }
+        final what = fareChangeSummary(before, rates);
+        if (what.isEmpty) return; // the same numbers, saved again
+        announcement.value = what;
+        unawaited(
+          NotificationService.instance.showNotification(
+            title: 'Fares have changed',
+            body: '$what. The new fare applies to your next booking.',
+          ),
+        );
       },
       onError: (Object e) {
         // Offline, or rules refused the read. Whatever was cached stands;
@@ -81,6 +106,9 @@ class FareSettingsService {
     _authSub = null;
     _unfollow();
   }
+
+  /// Marks the last change as told, so it is not shown twice.
+  void announced() => announcement.value = null;
 
   void _apply(FareRates rates) {
     // A document that somehow holds nonsense is ignored rather than used:

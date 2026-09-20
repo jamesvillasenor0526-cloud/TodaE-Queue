@@ -72,6 +72,39 @@ void main() {
     });
   });
 
+  group('telling people the rates changed', () {
+    test('says what moved, and by how much', () {
+      const before = FareRates(minimumFare: 35, ratePerKm: 10);
+      const after = FareRates(minimumFare: 40, ratePerKm: 12);
+      expect(fareChangeSummary(before, after), 'base fare ₱35 → ₱40, per km ₱10 → ₱12');
+    });
+
+    test('only the rate that changed is mentioned', () {
+      const before = FareRates(minimumFare: 35, ratePerKm: 10);
+      expect(
+        fareChangeSummary(before, const FareRates(minimumFare: 35, ratePerKm: 12)),
+        'per km ₱10 → ₱12',
+      );
+    });
+
+    test('re-saving the same rates announces nothing', () {
+      // The setting carries a timestamp and an author, so it is written
+      // again even when the numbers are untouched.
+      const same = FareRates(minimumFare: 35, ratePerKm: 10);
+      expect(fareChangeSummary(same, same), isEmpty);
+    });
+
+    test('centavos are shown when there are any', () {
+      expect(
+        fareChangeSummary(
+          const FareRates(minimumFare: 35, ratePerKm: 10),
+          const FareRates(minimumFare: 35, ratePerKm: 12.5),
+        ),
+        'per km ₱10 → ₱12.50',
+      );
+    });
+  });
+
   group('what a ride costs at the rates in force', () {
     test('the defaults charge what they always did', () {
       expect(fare.calculateFareFromDistance(0.5), 35);

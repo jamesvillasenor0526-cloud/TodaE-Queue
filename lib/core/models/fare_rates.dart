@@ -97,3 +97,21 @@ class FareRates {
   @override
   String toString() => 'FareRates(min: $minimumFare, perKm: $ratePerKm)';
 }
+
+/// What changed between two sets of rates, for telling people about it.
+///
+/// An empty string when nothing anyone would notice changed: the setting is
+/// saved with a timestamp and an author on every edit, and a phone should
+/// not announce "fares updated" because an admin re-saved the same numbers.
+String fareChangeSummary(FareRates before, FareRates after, {
+  String Function(double)? format,
+}) {
+  final money = format ?? ((v) => '₱${v.toStringAsFixed(v == v.roundToDouble() ? 0 : 2)}');
+  final parts = <String>[
+    if (before.minimumFare != after.minimumFare)
+      'base fare ${money(before.minimumFare)} → ${money(after.minimumFare)}',
+    if (before.ratePerKm != after.ratePerKm)
+      'per km ${money(before.ratePerKm)} → ${money(after.ratePerKm)}',
+  ];
+  return parts.join(', ');
+}

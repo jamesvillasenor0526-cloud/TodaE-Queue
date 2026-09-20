@@ -9,6 +9,7 @@ import '../../../core/services/contact_service.dart';
 import '../../shared/profile/my_contact.dart';
 import '../../../core/services/dispatch_service.dart';
 import '../../../core/services/fare_service.dart';
+import '../../../widgets/fare_change_notice.dart';
 import '../../shared/user_profile_screen.dart';
 import 'pickup_location_screen.dart';
 import 'destination_picker_screen.dart';
@@ -355,6 +356,9 @@ class _HomeTabState extends State<_HomeTab> {
                   ],
                 ),
               ),
+              // An admin can change the fares while the app is open; this
+              // says so rather than letting the price change unannounced.
+              const FareChangeNotice(),
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: Row(

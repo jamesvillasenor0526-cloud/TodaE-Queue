@@ -162,210 +162,225 @@ class _ResubmitScreenState extends State<ResubmitScreen> {
   @override
   Widget build(BuildContext context) {
     final reason = _s('rejectionReason');
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Registration not approved'),
-        automaticallyImplyLeading: false,
-        actions: [
-          IconButton(
-            tooltip: 'Sign out',
-            onPressed: () async {
-              await FirebaseAuth.instance.signOut();
-              if (context.mounted) {
-                Navigator.pushNamedAndRemoveUntil(
-                  context,
-                  AppRoutes.login,
-                  (_) => false,
-                );
-              }
-            },
-            icon: const Icon(Icons.logout),
+    // Back would quietly close the app from here, since this screen
+    // replaced the whole stack. Say what the ways out are instead.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Send your details for review, or sign out from the top right.',
+            ),
           ),
-        ],
-      ),
-      body: Form(
-        key: _formKey,
-        child: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            Center(
-              child: Column(
-                children: [
-                  Image.asset(
-                    'assets/images/toda_equeue_plus_logo.png',
-                    height: 72,
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'TODA E-QUEUE+',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 20),
-            // What the admin said — it is the point of this screen.
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: AppTheme.errorRed.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: AppTheme.errorRed.withValues(alpha: 0.3),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.info_outline, color: AppTheme.errorRed),
-                      SizedBox(width: 8),
-                      Text(
-                        'Why your registration was rejected',
-                        style: TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    reason.isEmpty
-                        ? 'Your TODA admin did not give a reason. Check your '
-                              'details and photos, or ask them.'
-                        : reason,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 20),
-            TextFormField(
-              controller: _name,
-              textCapitalization: TextCapitalization.words,
-              decoration: const InputDecoration(
-                labelText: 'Full name, as on your ID',
-                prefixIcon: Icon(Icons.person_outlined),
-              ),
-              validator: (v) => _required(v, 'full name'),
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _plate,
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                labelText: 'Plate Number',
-                prefixIcon: Icon(Icons.numbers_outlined),
-              ),
-              validator: (v) => _required(v, 'plate number'),
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _body,
-              keyboardType: TextInputType.number,
-              maxLength: 4,
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly,
-                LengthLimitingTextInputFormatter(4),
-              ],
-              decoration: const InputDecoration(
-                labelText: 'Body Number',
-                prefixIcon: Icon(Icons.electric_rickshaw_outlined),
-              ),
-              validator: (v) => _required(v, 'body number'),
-            ),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<String>(
-              initialValue: _idType,
-              decoration: const InputDecoration(
-                labelText: 'Valid ID Type',
-                prefixIcon: Icon(Icons.badge_outlined),
-              ),
-              items: [
-                for (final e in kIdTypes.entries)
-                  DropdownMenuItem(value: e.key, child: Text(e.value)),
-              ],
-              onChanged: (v) => setState(() => _idType = v ?? _idType),
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _idNumber,
-              decoration: InputDecoration(
-                labelText: _idType == 'drivers_license'
-                    ? 'License Number'
-                    : 'ID Number',
-                prefixIcon: const Icon(Icons.numbers_outlined),
-              ),
-              validator: (v) => _required(v, 'ID number'),
-            ),
-            const SizedBox(height: 24),
-            // Photos: optional. Retake them only if the reason is about them
-            // — otherwise the ones already sent are kept.
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Colors.grey.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Selfie and ID photo',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _selfie != null || _idPhoto != null
-                        ? 'New photos taken — they replace the old ones when '
-                              'you send.'
-                        : 'Your current photos are kept. Retake them if the '
-                              'reason is about your photos.',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppTheme.textMuted,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  OutlinedButton.icon(
-                    onPressed: _sending ? null : _retakePhotos,
-                    icon: const Icon(Icons.camera_alt_outlined),
-                    label: Text(
-                      _selfie != null || _idPhoto != null
-                          ? 'Retake again'
-                          : 'Retake selfie and ID',
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 16),
-              Text(_error!, style: const TextStyle(color: AppTheme.errorRed)),
-            ],
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: _sending ? null : _send,
-              icon: _sending
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.send),
-              label: Text(_sending ? 'Sending…' : 'Send for review'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primaryGreen,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-              ),
+        );
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Registration not approved'),
+          automaticallyImplyLeading: false,
+          actions: [
+            IconButton(
+              tooltip: 'Sign out',
+              onPressed: () async {
+                await FirebaseAuth.instance.signOut();
+                if (context.mounted) {
+                  Navigator.pushNamedAndRemoveUntil(
+                    context,
+                    AppRoutes.login,
+                    (_) => false,
+                  );
+                }
+              },
+              icon: const Icon(Icons.logout),
             ),
           ],
+        ),
+        body: Form(
+          key: _formKey,
+          child: ListView(
+            padding: const EdgeInsets.all(20),
+            children: [
+              Center(
+                child: Column(
+                  children: [
+                    Image.asset(
+                      'assets/images/toda_equeue_plus_logo.png',
+                      height: 72,
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'TODA E-QUEUE+',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              // What the admin said — it is the point of this screen.
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppTheme.errorRed.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: AppTheme.errorRed.withValues(alpha: 0.3),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.info_outline, color: AppTheme.errorRed),
+                        SizedBox(width: 8),
+                        Text(
+                          'Why your registration was rejected',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      reason.isEmpty
+                          ? 'Your TODA admin did not give a reason. Check your '
+                                'details and photos, or ask them.'
+                          : reason,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              TextFormField(
+                controller: _name,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  labelText: 'Full name, as on your ID',
+                  prefixIcon: Icon(Icons.person_outlined),
+                ),
+                validator: (v) => _required(v, 'full name'),
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _plate,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(
+                  labelText: 'Plate Number',
+                  prefixIcon: Icon(Icons.numbers_outlined),
+                ),
+                validator: (v) => _required(v, 'plate number'),
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _body,
+                keyboardType: TextInputType.number,
+                maxLength: 4,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(4),
+                ],
+                decoration: const InputDecoration(
+                  labelText: 'Body Number',
+                  prefixIcon: Icon(Icons.electric_rickshaw_outlined),
+                ),
+                validator: (v) => _required(v, 'body number'),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: _idType,
+                decoration: const InputDecoration(
+                  labelText: 'Valid ID Type',
+                  prefixIcon: Icon(Icons.badge_outlined),
+                ),
+                items: [
+                  for (final e in kIdTypes.entries)
+                    DropdownMenuItem(value: e.key, child: Text(e.value)),
+                ],
+                onChanged: (v) => setState(() => _idType = v ?? _idType),
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _idNumber,
+                decoration: InputDecoration(
+                  labelText: _idType == 'drivers_license'
+                      ? 'License Number'
+                      : 'ID Number',
+                  prefixIcon: const Icon(Icons.numbers_outlined),
+                ),
+                validator: (v) => _required(v, 'ID number'),
+              ),
+              const SizedBox(height: 24),
+              // Photos: optional. Retake them only if the reason is about them
+              // — otherwise the ones already sent are kept.
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.grey.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Selfie and ID photo',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _selfie != null || _idPhoto != null
+                          ? 'New photos taken — they replace the old ones when '
+                                'you send.'
+                          : 'Your current photos are kept. Retake them if the '
+                                'reason is about your photos.',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.textMuted,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      onPressed: _sending ? null : _retakePhotos,
+                      icon: const Icon(Icons.camera_alt_outlined),
+                      label: Text(
+                        _selfie != null || _idPhoto != null
+                            ? 'Retake again'
+                            : 'Retake selfie and ID',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 16),
+                Text(_error!, style: const TextStyle(color: AppTheme.errorRed)),
+              ],
+              const SizedBox(height: 24),
+              ElevatedButton.icon(
+                onPressed: _sending ? null : _send,
+                icon: _sending
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.send),
+                label: Text(_sending ? 'Sending…' : 'Send for review'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primaryGreen,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -11,6 +11,7 @@ import '../../../config/theme.dart';
 import '../../../core/models/location_need.dart';
 import '../../../core/services/fare_service.dart';
 import '../../../widgets/fare_change_notice.dart';
+import '../../../widgets/home_back_scope.dart';
 import '../../../core/services/geofence_service.dart';
 import '../../../core/services/location_hub.dart';
 import '../../../core/services/dispatch_service.dart';
@@ -163,9 +164,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           if (data?['verificationStatus'] == 'rejected' && mounted) {
             Navigator.pushAndRemoveUntil(
               context,
-              MaterialPageRoute(
-                builder: (_) => ResubmitScreen(profile: data!),
-              ),
+              MaterialPageRoute(builder: (_) => ResubmitScreen(profile: data!)),
               (_) => false,
             );
             return;
@@ -787,98 +786,103 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('TODA E-QUEUE+'),
-        actions: [
-          IconButton(
-            tooltip: 'Sign out',
-            icon: const Icon(Icons.logout),
-            onPressed: () async {
-              final confirm = await showDialog<bool>(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: const Text('Sign Out'),
-                  content: const Text('Are you sure you want to sign out?'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx, false),
-                      child: const Text('Cancel'),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx, true),
-                      child: const Text(
-                        'Sign Out',
-                        style: TextStyle(color: AppTheme.errorRed),
+    // Back returns to the first tab, and asks before closing the app.
+    return HomeBackScope(
+      tabIndex: _currentIndex,
+      onFirstTab: () => setState(() => _currentIndex = 0),
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('TODA E-QUEUE+'),
+          actions: [
+            IconButton(
+              tooltip: 'Sign out',
+              icon: const Icon(Icons.logout),
+              onPressed: () async {
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Sign Out'),
+                    content: const Text('Are you sure you want to sign out?'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('Cancel'),
                       ),
-                    ),
-                  ],
-                ),
-              );
-              if (confirm == true && context.mounted) {
-                await FirebaseAuth.instance.signOut();
-                if (!context.mounted) return;
-                Navigator.pushReplacementNamed(context, AppRoutes.login);
-              }
-            },
-          ),
-        ],
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: const Text(
+                          'Sign Out',
+                          style: TextStyle(color: AppTheme.errorRed),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirm == true && context.mounted) {
+                  await FirebaseAuth.instance.signOut();
+                  if (!context.mounted) return;
+                  Navigator.pushReplacementNamed(context, AppRoutes.login);
+                }
+              },
+            ),
+          ],
+        ),
+        body: IndexedStack(
+          index: _currentIndex,
+          children: [
+            _QueueTab(
+              uid: uid,
+              locationPermissionDenied: _locationPermissionDenied,
+              hasActiveEntry: _hasActiveEntry,
+              activeBookingId: _activeBookingId,
+              onActiveEntryChanged: (isActive, bookingId) {
+                if (isActive != _hasActiveEntry ||
+                    bookingId != _activeBookingId) {
+                  setState(() {
+                    _hasActiveEntry = isActive;
+                    _activeBookingId = bookingId;
+                  });
+                }
+              },
+              onLeaveQueue: _leaveQueue,
+              onCompleteTrip: _completeTrip,
+              onBookingAccepted: _startLocationWatch, // ADD THIS
+              onCallPassenger: _callPassenger, // ← ADD
+              onMessagePassenger: _messagePassenger, // ← ADD
+            ),
+            _DriverMapTab(isActive: _currentIndex == 1),
+            _DriverHistoryTab(uid: uid),
+            _DriverProfileTab(uid: uid),
+          ],
+        ),
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _currentIndex,
+          onDestinationSelected: (i) => setState(() => _currentIndex = i),
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.electric_rickshaw_outlined),
+              selectedIcon: Icon(Icons.electric_rickshaw),
+              label: 'Queue',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.map_outlined),
+              selectedIcon: Icon(Icons.map),
+              label: 'Map',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.history_outlined),
+              selectedIcon: Icon(Icons.history),
+              label: 'History',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.person_outlined),
+              selectedIcon: Icon(Icons.person),
+              label: 'Profile',
+            ),
+          ],
+        ),
+        floatingActionButton: const SosButton(),
       ),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: [
-          _QueueTab(
-            uid: uid,
-            locationPermissionDenied: _locationPermissionDenied,
-            hasActiveEntry: _hasActiveEntry,
-            activeBookingId: _activeBookingId,
-            onActiveEntryChanged: (isActive, bookingId) {
-              if (isActive != _hasActiveEntry ||
-                  bookingId != _activeBookingId) {
-                setState(() {
-                  _hasActiveEntry = isActive;
-                  _activeBookingId = bookingId;
-                });
-              }
-            },
-            onLeaveQueue: _leaveQueue,
-            onCompleteTrip: _completeTrip,
-            onBookingAccepted: _startLocationWatch, // ADD THIS
-            onCallPassenger: _callPassenger, // ← ADD
-            onMessagePassenger: _messagePassenger, // ← ADD
-          ),
-          _DriverMapTab(isActive: _currentIndex == 1),
-          _DriverHistoryTab(uid: uid),
-          _DriverProfileTab(uid: uid),
-        ],
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (i) => setState(() => _currentIndex = i),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.electric_rickshaw_outlined),
-            selectedIcon: Icon(Icons.electric_rickshaw),
-            label: 'Queue',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.map_outlined),
-            selectedIcon: Icon(Icons.map),
-            label: 'Map',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.history_outlined),
-            selectedIcon: Icon(Icons.history),
-            label: 'History',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outlined),
-            selectedIcon: Icon(Icons.person),
-            label: 'Profile',
-          ),
-        ],
-      ),
-      floatingActionButton: const SosButton(),
     );
   }
 }
@@ -1168,11 +1172,7 @@ class _VerificationStatusView extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(
-              Icons.hourglass_top,
-              size: 64,
-              color: AppTheme.warning,
-            ),
+            const Icon(Icons.hourglass_top, size: 64, color: AppTheme.warning),
             const SizedBox(height: 16),
             Text(
               resubmitted

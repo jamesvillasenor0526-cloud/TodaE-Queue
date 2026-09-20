@@ -10,6 +10,7 @@ import '../../shared/profile/my_contact.dart';
 import '../../../core/services/dispatch_service.dart';
 import '../../../core/services/fare_service.dart';
 import '../../../widgets/fare_change_notice.dart';
+import '../../../widgets/home_back_scope.dart';
 import '../../shared/user_profile_screen.dart';
 import 'pickup_location_screen.dart';
 import 'destination_picker_screen.dart';
@@ -38,94 +39,99 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('TODA E-QUEUE+'),
-        actions: [
-          IconButton(
-            tooltip: 'Sign out',
-            icon: const Icon(Icons.logout),
-            onPressed: () async {
-              final confirm = await showDialog<bool>(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: const Text('Sign Out'),
-                  content: const Text('Are you sure you want to sign out?'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx, false),
-                      child: const Text('Cancel'),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx, true),
-                      child: const Text(
-                        'Sign Out',
-                        style: TextStyle(color: AppTheme.errorRed),
+    // Back returns to the first tab, and asks before closing the app.
+    return HomeBackScope(
+      tabIndex: _currentIndex,
+      onFirstTab: () => setState(() => _currentIndex = 0),
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('TODA E-QUEUE+'),
+          actions: [
+            IconButton(
+              tooltip: 'Sign out',
+              icon: const Icon(Icons.logout),
+              onPressed: () async {
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Sign Out'),
+                    content: const Text('Are you sure you want to sign out?'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('Cancel'),
                       ),
-                    ),
-                  ],
-                ),
-              );
-              if (confirm == true && context.mounted) {
-                await FirebaseAuth.instance.signOut();
-                if (!context.mounted) return;
-                Navigator.pushReplacementNamed(context, AppRoutes.login);
-              }
-            },
-          ),
-        ],
-      ),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: const [_HomeTab(), _HistoryTab(), _ProfileTab()],
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (i) => setState(() => _currentIndex = i),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
-            label: 'Home',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.history_outlined),
-            selectedIcon: Icon(Icons.history),
-            label: 'History',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outlined),
-            selectedIcon: Icon(Icons.person),
-            label: 'Profile',
-          ),
-        ],
-      ),
-      floatingActionButton: Column(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          FloatingActionButton(
-            heroTag: 'map',
-            // The map picks a terminal; booking from it is the same flow
-            // as from the list.
-            onPressed: () async {
-              // Untyped on purpose: the route table builds
-              // MaterialPageRoute<dynamic>, and asking for a typed result
-              // made pushNamed throw before the map ever opened.
-              final picked = await Navigator.pushNamed(
-                context,
-                AppRoutes.terminalMap,
-              );
-              if (picked is! Map || !context.mounted) return;
-              final id = picked['terminalId'], name = picked['terminalName'];
-              if (id is! String || name is! String) return;
-              await _bookFromTerminal(context, id, name);
-            },
-            backgroundColor: AppTheme.primaryBlue,
-            child: const Icon(Icons.map, color: Colors.white),
-          ),
-          const SizedBox(height: 12),
-          const SosButton(),
-        ],
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: const Text(
+                          'Sign Out',
+                          style: TextStyle(color: AppTheme.errorRed),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirm == true && context.mounted) {
+                  await FirebaseAuth.instance.signOut();
+                  if (!context.mounted) return;
+                  Navigator.pushReplacementNamed(context, AppRoutes.login);
+                }
+              },
+            ),
+          ],
+        ),
+        body: IndexedStack(
+          index: _currentIndex,
+          children: const [_HomeTab(), _HistoryTab(), _ProfileTab()],
+        ),
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _currentIndex,
+          onDestinationSelected: (i) => setState(() => _currentIndex = i),
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home),
+              label: 'Home',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.history_outlined),
+              selectedIcon: Icon(Icons.history),
+              label: 'History',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.person_outlined),
+              selectedIcon: Icon(Icons.person),
+              label: 'Profile',
+            ),
+          ],
+        ),
+        floatingActionButton: Column(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            FloatingActionButton(
+              heroTag: 'map',
+              // The map picks a terminal; booking from it is the same flow
+              // as from the list.
+              onPressed: () async {
+                // Untyped on purpose: the route table builds
+                // MaterialPageRoute<dynamic>, and asking for a typed result
+                // made pushNamed throw before the map ever opened.
+                final picked = await Navigator.pushNamed(
+                  context,
+                  AppRoutes.terminalMap,
+                );
+                if (picked is! Map || !context.mounted) return;
+                final id = picked['terminalId'], name = picked['terminalName'];
+                if (id is! String || name is! String) return;
+                await _bookFromTerminal(context, id, name);
+              },
+              backgroundColor: AppTheme.primaryBlue,
+              child: const Icon(Icons.map, color: Colors.white),
+            ),
+            const SizedBox(height: 12),
+            const SosButton(),
+          ],
+        ),
       ),
     );
   }
